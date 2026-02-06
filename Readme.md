@@ -9,6 +9,8 @@ This MCP service provides access to Gremlin's reliability testing and management
 - Service dependency tracking
 - Reliability experiments and testing
 - Reliability reporting
+- Usage and pricing reports
+- Client (agent) and attack summaries
 
 ## Installation
 
@@ -87,6 +89,20 @@ Generates a reliability report for a service on a specific date.
 Retrieves recent reliability experiments for a service.
 - **Parameters:** `teamId` (required), `serviceId` (required), `dependencyId` (optional), `testId` (optional), `limit` (optional, default: 100)
 
+### Usage & Billing
+
+#### `get_pricing_report`
+Fetches the pricing usage report for the company over a specified date range. Returns usage broken down by tracking period including active agents, targetable applications, and unique targets by type.
+- **Parameters:** `startDate` (required, yyyy-mm-dd), `endDate` (required, yyyy-mm-dd), `trackingPeriod` (optional: `Daily`, `Weekly`, or `Monthly`, defaults to the company's configured period)
+
+#### `get_client_summary`
+Loads the client (agent) summary for a team over a specified time period. Shows agent activity and status.
+- **Parameters:** `teamId` (required), `start` (required, yyyy-mm-dd), `end` (required, yyyy-mm-dd), `period` (required: `MONTHS`, `WEEKS`, or `DAYS`)
+
+#### `get_attack_summary`
+Loads the attack summary for a team over a specified time period. Shows attack activity and results.
+- **Parameters:** `teamId` (required), `start` (required, yyyy-mm-dd), `end` (required, yyyy-mm-dd), `period` (required: `MONTHS`, `WEEKS`, or `DAYS`)
+
 ### Testing & Experiments
 
 #### `get_recent_reliability_tests`
@@ -117,6 +133,26 @@ Here are some example queries you can use with Claude when this MCP service is c
 3. **Identify gaps in Scheduling:**
 > I think my schedule for tests is misconfigured for my RM services.  I think this because I'm seeing a lot of expired policy evaluations in my RM Reports.  It takes about 6 weeks to expire a policy evaluation and I should be testing every week.  Now given my scheduling window it's possible that I'm not running every test every week, but across 6 weeks it seems less likely.  Now, it's expected that for policy evaluations on a dependency which is marked as a SPOF it's expected for the policy evaluation to get to EXPIRED state.  So can you go check all my RM services and figure out how many policy evaluations (excluding those on ignored or SPOF dependencies) are expired as a percentage of total? I'd like to see that on a per service basis
 
+
+## Testing
+
+The project uses [vitest](https://vitest.dev/) for integration tests that run against a live Gremlin API.
+
+### Prerequisites
+
+Create a `.env` file in the project root with your API key:
+
+```
+GREMLIN_API_KEY=your_gremlin_api_key_here
+```
+
+### Running Tests
+
+```bash
+env $(cat .env | xargs) make test
+```
+
+This will build the project and run the full integration test suite. Tests are skipped automatically if `GREMLIN_API_KEY` is not set.
 
 ## Troubleshooting
 
