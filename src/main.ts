@@ -8,7 +8,7 @@ import { registerTools } from "./tools/index.js";
 
 const server = new McpServer({
   name: "Gremlin Inc Server",
-  version: "1.0.0"
+  version: "1.1.0"
 });
 
 const gremlinApi = new GremlinApi();
