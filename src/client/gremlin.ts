@@ -128,6 +128,26 @@ export interface ReliabilityTestSuite {
   excludedRiskIds?: string[];
 }
 
+export interface PricingUsage {
+  start: string;
+  end: string;
+  maxActiveAgents: number;
+  maxTargetableApplications: number;
+  uniqueTargetsApplication: number;
+  uniqueTargetsContainer: number;
+  uniqueTargetsHost: number;
+}
+
+export type TrackingPeriod = 'Daily' | 'Weekly' | 'Monthly';
+
+export interface PricingReport {
+  companyId: string;
+  startDate: string;
+  endDate: string;
+  trackingPeriod: TrackingPeriod;
+  usageByTrackingPeriod: PricingUsage[];
+}
+
 export interface User { }
 
 export interface Team { 
@@ -274,6 +294,22 @@ export class GremlinApi {
     return this.requestWithRetry<Page<Service>>(`services/${serviceId}`, {
       method: 'GET',
       params: { teamId },
+    });
+  }
+
+  async getPricingReport(startDate: string, endDate: string, trackingPeriod?: TrackingPeriod): Promise<PricingReport> {
+    if (!startDate || !endDate) {
+      throw new Error('Both startDate and endDate are required to fetch the pricing report.');
+    }
+
+    const params: Record<string, string> = { startDate, endDate };
+    if (trackingPeriod) {
+      params.trackingPeriod = trackingPeriod;
+    }
+
+    return this.requestWithRetry<PricingReport>('reports/pricing', {
+      method: 'GET',
+      params,
     });
   }
 

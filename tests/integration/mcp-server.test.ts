@@ -51,12 +51,13 @@ describe.skipIf(SKIP)('MCP server integration', () => {
 
   // ── Protocol-level checks ──────────────────────────────────────────
 
-  it('lists all 9 tools', async () => {
+  it('lists all 10 tools', async () => {
     const result = await client.listTools();
     const names = result.tools.map(t => t.name).sort();
 
     expect(names).toEqual([
       'get_current_test_suite',
+      'get_pricing_report',
       'get_recent_reliability_tests',
       'get_reliability_experiments',
       'get_reliability_report',
@@ -184,6 +185,64 @@ describe.skipIf(SKIP)('MCP server integration', () => {
       arguments: { teamId: teamId!, serviceId: serviceId!, limit: 2 },
     }) as ToolResult;
     expect(result.isError).toBeFalsy();
+  });
+
+  // ── Tool calls: pricing ──────────────────────────────────────────
+
+  it('get_pricing_report returns a valid report', async () => {
+    const now = new Date();
+    const endDate = now.toISOString().split('T')[0];
+    const startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
+      .toISOString().split('T')[0];
+
+    const result = await client.callTool({
+      name: 'get_pricing_report',
+      arguments: { startDate, endDate },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const report = parseToolResult(result) as {
+      companyId: string;
+      startDate: string;
+      endDate: string;
+      trackingPeriod: string;
+      usageByTrackingPeriod: Array<Record<string, unknown>>;
+    };
+    expect(report).toHaveProperty('companyId');
+    expect(report).toHaveProperty('startDate');
+    expect(report).toHaveProperty('endDate');
+    expect(report).toHaveProperty('trackingPeriod');
+    expect(['Daily', 'Weekly', 'Monthly']).toContain(report.trackingPeriod);
+    expect(Array.isArray(report.usageByTrackingPeriod)).toBe(true);
+
+    if (report.usageByTrackingPeriod.length > 0) {
+      const entry = report.usageByTrackingPeriod[0];
+      expect(entry).toHaveProperty('start');
+      expect(entry).toHaveProperty('end');
+      expect(entry).toHaveProperty('maxActiveAgents');
+    }
+  });
+
+  it('get_pricing_report respects trackingPeriod param', async () => {
+    const now = new Date();
+    const endDate = now.toISOString().split('T')[0];
+    const startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
+      .toISOString().split('T')[0];
+
+    const result = await client.callTool({
+      name: 'get_pricing_report',
+      arguments: { startDate, endDate, trackingPeriod: 'Daily' },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const report = parseToolResult(result) as { trackingPeriod: string };
+    expect(report.trackingPeriod).toBe('Daily');
+  });
+
+  it('get_pricing_report rejects missing dates at the schema level', async () => {
+    await expect(
+      client.callTool({ name: 'get_pricing_report', arguments: {} })
+    ).rejects.toThrow();
   });
 
   // ── Error handling ─────────────────────────────────────────────────
