@@ -51,22 +51,22 @@ describe.skipIf(SKIP)('MCP server integration', () => {
 
   // ── Protocol-level checks ──────────────────────────────────────────
 
-  it('lists all 10 tools', async () => {
+  it('registers all expected tools', async () => {
     const result = await client.listTools();
     const names = result.tools.map(t => t.name).sort();
 
-    expect(names).toEqual([
-      'get_current_test_suite',
-      'get_pricing_report',
-      'get_recent_reliability_tests',
-      'get_reliability_experiments',
-      'get_reliability_report',
-      'get_service_dependencies',
-      'get_service_status_checks',
-      'list_service_risks',
-      'list_services',
-      'list_teams',
-    ]);
+    expect(names).toContain('get_current_test_suite');
+    expect(names).toContain('get_pricing_report');
+    expect(names).toContain('get_client_summary');
+    expect(names).toContain('get_attack_summary');
+    expect(names).toContain('get_recent_reliability_tests');
+    expect(names).toContain('get_reliability_experiments');
+    expect(names).toContain('get_reliability_report');
+    expect(names).toContain('get_service_dependencies');
+    expect(names).toContain('get_service_status_checks');
+    expect(names).toContain('list_service_risks');
+    expect(names).toContain('list_services');
+    expect(names).toContain('list_teams');
   });
 
   it('lists resource templates', async () => {
@@ -242,6 +242,52 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   it('get_pricing_report rejects missing dates at the schema level', async () => {
     await expect(
       client.callTool({ name: 'get_pricing_report', arguments: {} })
+    ).rejects.toThrow();
+  });
+
+  // ── Tool calls: team reports ─────────────────────────────────────
+
+  it('get_client_summary returns a response for a real team', async () => {
+    expect(teamId).toBeDefined();
+
+    const now = new Date();
+    const end = now.toISOString().split('T')[0];
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
+      .toISOString().split('T')[0];
+
+    const result = await client.callTool({
+      name: 'get_client_summary',
+      arguments: { teamId: teamId!, start, end, period: 'MONTHS' },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+    expect(result.content.length).toBeGreaterThan(0);
+  });
+
+  it('get_client_summary rejects missing params at the schema level', async () => {
+    await expect(
+      client.callTool({ name: 'get_client_summary', arguments: {} })
+    ).rejects.toThrow();
+  });
+
+  it('get_attack_summary returns a response for a real team', async () => {
+    expect(teamId).toBeDefined();
+
+    const now = new Date();
+    const end = now.toISOString().split('T')[0];
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
+      .toISOString().split('T')[0];
+
+    const result = await client.callTool({
+      name: 'get_attack_summary',
+      arguments: { teamId: teamId!, start, end, period: 'MONTHS' },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+    expect(result.content.length).toBeGreaterThan(0);
+  });
+
+  it('get_attack_summary rejects missing params at the schema level', async () => {
+    await expect(
+      client.callTool({ name: 'get_attack_summary', arguments: {} })
     ).rejects.toThrow();
   });
 

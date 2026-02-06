@@ -148,6 +148,8 @@ export interface PricingReport {
   usageByTrackingPeriod: PricingUsage[];
 }
 
+export type ReportPeriod = 'MONTHS' | 'WEEKS' | 'DAYS';
+
 export interface User { }
 
 export interface Team { 
@@ -310,6 +312,28 @@ export class GremlinApi {
     return this.requestWithRetry<PricingReport>('reports/pricing', {
       method: 'GET',
       params,
+    });
+  }
+
+  async getClientSummary(teamId: string, start: string, end: string, period: ReportPeriod): Promise<unknown> {
+    if (!teamId || !start || !end || !period) {
+      throw new Error('teamId, start, end, and period are all required to fetch the client summary.');
+    }
+
+    return this.requestWithRetry<unknown>('reports/clients', {
+      method: 'GET',
+      params: { teamId, start, end, period },
+    });
+  }
+
+  async getAttackSummary(teamId: string, start: string, end: string, period: ReportPeriod): Promise<unknown> {
+    if (!teamId || !start || !end || !period) {
+      throw new Error('teamId, start, end, and period are all required to fetch the attack summary.');
+    }
+
+    return this.requestWithRetry<unknown>('reports/attacks', {
+      method: 'GET',
+      params: { teamId, start, end, period },
     });
   }
 
