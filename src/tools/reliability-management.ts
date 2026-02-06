@@ -19,7 +19,7 @@ export function createGetReliabilityExperimentTool(api: GremlinApi) {
             }
 
             try {
-                let results =  await api.getReliabilityExperiment(serviceId, teamId, dependencyId, testId, limit);
+                const results = await api.getReliabilityExperiment(serviceId, teamId, dependencyId, testId, limit);
                 if ("items" in results) {
                     results.items = results.items.map(run => {
                         // Delete extraneous data to save on data transfer
@@ -30,6 +30,7 @@ export function createGetReliabilityExperimentTool(api: GremlinApi) {
                     // Delete extraneous data to save on data transfer
                     results.run.graph.nodesRecursive = [];
                 }
+                return results;
             } catch (error) {
                 console.error(`Error fetching reliability report`, error);
                 throw new Error(`Failed to fetch reliability report: ${error instanceof Error ? error.message : String(error)}`);

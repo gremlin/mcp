@@ -76,7 +76,11 @@ export function createListServicesTool(api: GremlinApi) {
   return {
     name: "list_services",
     description: "Lists available reliability management services (RM Services for short). Returns service names, descriptions, score, and targeting information.",
-    schema: { },
+    schema: {
+        "$schema":"https://json-schema.org/draft/2020-12/schema",
+        "type":"object",
+        "properties":{}
+    },
     /**
      * Handles the list_services tool request with pagination and search
      *
