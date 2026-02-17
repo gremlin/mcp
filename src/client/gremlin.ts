@@ -85,6 +85,12 @@ interface DiagnosisResponse {
   suggestions: Suggestion[];
 }
 
+export interface ReliabilityTestRunParameters {
+  serviceId: string;
+  dependencyId?: string;
+  failureFlagName?: string;
+}
+
 export interface ReliabilityTestRun {
   guid: string;
   serviceId: string;
@@ -161,7 +167,7 @@ export interface Team {
 
 export class GremlinApi {
   private baseUrl: string = 'https://api.gremlin.com/v1';
-  private userAgent = "@gremlin/gremlin-mcp/1.1.0";
+  private userAgent = "@gremlin/gremlin-mcp/1.2.0";
   private cache;
 
   constructor() {
@@ -292,6 +298,26 @@ export class GremlinApi {
     });
   }
 
+  async runReliabilityTest(
+    reliabilityTestId: string,
+    teamId: string,
+    params: ReliabilityTestRunParameters,
+  ): Promise<ReliabilityTestRun> {
+    if (!reliabilityTestId || !teamId || !params.serviceId) {
+      throw new Error('reliabilityTestId, teamId, and serviceId are required to run a reliability test.');
+    }
+
+    return this.requestWithRetry<ReliabilityTestRun>(
+      `reliability-tests/${reliabilityTestId}/runs`,
+      {
+        method: 'POST',
+        params: { teamId },
+        body: JSON.stringify(params),
+        skipCache: true,
+      },
+    );
+  }
+
   async getService(serviceId: string, teamId: string): Promise<Page<Service>> {
     return this.requestWithRetry<Page<Service>>(`services/${serviceId}`, {
       method: 'GET',
@@ -348,9 +374,10 @@ export class GremlinApi {
     options: RequestInit & {
       params?: Record<string, any>;
       maxRetries?: number;
+      skipCache?: boolean;
     } = {},
   ): Promise<T> {
-    const { params, maxRetries = 3, ...fetchOptions } = options;
+    const { params, maxRetries = 3, skipCache = false, ...fetchOptions } = options;
     const url = new URL(`${this.baseUrl}/${path}`);
 
     if (params) {
@@ -358,7 +385,7 @@ export class GremlinApi {
     }
 
     const urlString = url.toString();
-    if (this.cache.has(urlString)) {
+    if (!skipCache && this.cache.has(urlString)) {
       return this.cache.get(urlString) as T;
     }
 
@@ -379,7 +406,9 @@ export class GremlinApi {
         }
         const responseData =  await response.json() as T;
 
-        this.cache.set(urlString, responseData, 60 * 10); // Cache for 10 minutes
+        if (!skipCache) {
+          this.cache.set(urlString, responseData, 60 * 10); // Cache for 10 minutes
+        }
         return responseData;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));

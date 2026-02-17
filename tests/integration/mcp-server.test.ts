@@ -67,6 +67,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(names).toContain('list_service_risks');
     expect(names).toContain('list_services');
     expect(names).toContain('list_teams');
+    expect(names).toContain('run_reliability_test');
   });
 
   it('lists resource templates', async () => {
@@ -185,6 +186,87 @@ describe.skipIf(SKIP)('MCP server integration', () => {
       arguments: { teamId: teamId!, serviceId: serviceId!, limit: 2 },
     }) as ToolResult;
     expect(result.isError).toBeFalsy();
+  });
+
+  // ── Tool calls: run reliability test ─────────────────────────────
+
+  it('run_reliability_test is registered', async () => {
+    const result = await client.listTools();
+    const names = result.tools.map(t => t.name);
+    expect(names).toContain('run_reliability_test');
+  });
+
+  it('run_reliability_test discovers test from report and runs it', async () => {
+    expect(teamId).toBeDefined();
+    expect(serviceId).toBeDefined();
+
+    // First, fetch the reliability report to find a valid reliabilityTestId
+    const reportResult = await client.callTool({
+      name: 'get_reliability_report',
+      arguments: { teamId: teamId!, serviceId: serviceId! },
+    }) as ToolResult;
+    expect(reportResult.isError).toBeFalsy();
+
+    const report = parseToolResult(reportResult) as {
+      reliability: Record<string, {
+        policyStates: Array<{
+          reliabilityTestId: string;
+          serviceId: string;
+          dependencyId?: string;
+          failureFlagName?: string;
+        }>;
+      }>;
+    };
+
+    // Find the first policy with a reliabilityTestId
+    let reliabilityTestId: string | undefined;
+    let testDependencyId: string | undefined;
+    let testFailureFlagName: string | undefined;
+
+    for (const category of Object.values(report.reliability)) {
+      for (const policy of category.policyStates) {
+        if (policy.reliabilityTestId) {
+          reliabilityTestId = policy.reliabilityTestId;
+          testDependencyId = policy.dependencyId;
+          testFailureFlagName = policy.failureFlagName;
+          break;
+        }
+      }
+      if (reliabilityTestId) break;
+    }
+
+    expect(reliabilityTestId).toBeDefined();
+
+    const runArgs: Record<string, string> = {
+      teamId: teamId!,
+      serviceId: serviceId!,
+      reliabilityTestId: reliabilityTestId!,
+    };
+    if (testDependencyId) runArgs.dependencyId = testDependencyId;
+    if (testFailureFlagName) runArgs.failureFlagName = testFailureFlagName;
+
+    const result = await client.callTool({
+      name: 'run_reliability_test',
+      arguments: runArgs,
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const run = parseToolResult(result) as {
+      guid: string;
+      serviceId: string;
+      run: { scenarioId: string };
+    };
+    expect(run).toHaveProperty('guid');
+    expect(run).toHaveProperty('serviceId');
+    expect(run).toHaveProperty('run');
+  }, 30000);
+
+  it('run_reliability_test rejects missing required params', async () => {
+    const result = await client.callTool({
+      name: 'run_reliability_test',
+      arguments: { teamId: '', serviceId: '', reliabilityTestId: '' },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
   });
 
   // ── Tool calls: pricing ──────────────────────────────────────────
