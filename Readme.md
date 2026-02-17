@@ -138,6 +138,8 @@ Here are some example queries you can use with Claude when this MCP service is c
 
 The project uses [vitest](https://vitest.dev/) for integration tests that run against a live Gremlin API.
 
+**Note:** Running tests requires Node.js 20.19+ or 22.12+ (vitest 4.x dependency). The built server itself runs fine on Node 18+.
+
 ### Prerequisites
 
 Create a `.env` file in the project root with your API key:
