@@ -12,3 +12,6 @@ build: install
 	npx tsc --noEmit \
 		&& npx esbuild src/main.ts --bundle --platform=node --format=esm --outfile=build/main.mjs
 
+test: build
+	npx vitest run
+

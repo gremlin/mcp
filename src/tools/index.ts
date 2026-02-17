@@ -3,6 +3,7 @@ import { GremlinApi } from "../client/gremlin";
 import { createGetCurrentTestSuiteTool, createGetRecentReliabilityTestsTool, createGetReliabilityExperimentTool, createGetReliabilityReportTool } from "./reliability-management";
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
 import { createListTeamsTool } from "./teams";
+import { createGetPricingReportTool, createGetClientSummaryTool, createGetAttackSummaryTool } from "./company";
 
 interface Tool {
   name: string;
@@ -24,7 +25,11 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createGetRecentReliabilityTestsTool(api),
     createGetCurrentTestSuiteTool(api),
 
-    createListTeamsTool(api) 
+    createListTeamsTool(api),
+
+    createGetPricingReportTool(api),
+    createGetClientSummaryTool(api),
+    createGetAttackSummaryTool(api)
   ];
 
   // Register each tool with the server

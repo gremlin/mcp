@@ -128,6 +128,28 @@ export interface ReliabilityTestSuite {
   excludedRiskIds?: string[];
 }
 
+export interface PricingUsage {
+  start: string;
+  end: string;
+  maxActiveAgents: number;
+  maxTargetableApplications: number;
+  uniqueTargetsApplication: number;
+  uniqueTargetsContainer: number;
+  uniqueTargetsHost: number;
+}
+
+export type TrackingPeriod = 'Daily' | 'Weekly' | 'Monthly';
+
+export interface PricingReport {
+  companyId: string;
+  startDate: string;
+  endDate: string;
+  trackingPeriod: TrackingPeriod;
+  usageByTrackingPeriod: PricingUsage[];
+}
+
+export type ReportPeriod = 'MONTHS' | 'WEEKS' | 'DAYS';
+
 export interface User { }
 
 export interface Team { 
@@ -139,7 +161,7 @@ export interface Team {
 
 export class GremlinApi {
   private baseUrl: string = 'https://api.gremlin.com/v1';
-  private userAgent = "@gremlin/gremlin-mcp/1.0.0";
+  private userAgent = "@gremlin/gremlin-mcp/1.1.0";
   private cache;
 
   constructor() {
@@ -274,6 +296,44 @@ export class GremlinApi {
     return this.requestWithRetry<Page<Service>>(`services/${serviceId}`, {
       method: 'GET',
       params: { teamId },
+    });
+  }
+
+  async getPricingReport(startDate: string, endDate: string, trackingPeriod?: TrackingPeriod): Promise<PricingReport> {
+    if (!startDate || !endDate) {
+      throw new Error('Both startDate and endDate are required to fetch the pricing report.');
+    }
+
+    const params: Record<string, string> = { startDate, endDate };
+    if (trackingPeriod) {
+      params.trackingPeriod = trackingPeriod;
+    }
+
+    return this.requestWithRetry<PricingReport>('reports/pricing', {
+      method: 'GET',
+      params,
+    });
+  }
+
+  async getClientSummary(teamId: string, start: string, end: string, period: ReportPeriod): Promise<unknown> {
+    if (!teamId || !start || !end || !period) {
+      throw new Error('teamId, start, end, and period are all required to fetch the client summary.');
+    }
+
+    return this.requestWithRetry<unknown>('reports/clients', {
+      method: 'GET',
+      params: { teamId, start, end, period },
+    });
+  }
+
+  async getAttackSummary(teamId: string, start: string, end: string, period: ReportPeriod): Promise<unknown> {
+    if (!teamId || !start || !end || !period) {
+      throw new Error('teamId, start, end, and period are all required to fetch the attack summary.');
+    }
+
+    return this.requestWithRetry<unknown>('reports/attacks', {
+      method: 'GET',
+      params: { teamId, start, end, period },
     });
   }
 
