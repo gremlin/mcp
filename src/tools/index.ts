@@ -4,6 +4,7 @@ import { createGetCurrentTestSuiteTool, createGetPendingTestRunsTool, createGetR
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
 import { createListTeamsTool } from "./teams";
 import { createGetPricingReportTool, createGetClientSummaryTool, createGetAttackSummaryTool } from "./company";
+import { createEstimateTestSuiteDurationTool, createSetServiceScheduleTool } from "./scheduling";
 
 interface Tool {
   name: string;
@@ -26,6 +27,9 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createGetCurrentTestSuiteTool(api),
     createRunReliabilityTestTool(api),
     createGetPendingTestRunsTool(api),
+
+    createEstimateTestSuiteDurationTool(api),
+    createSetServiceScheduleTool(api),
 
     createListTeamsTool(api),
 

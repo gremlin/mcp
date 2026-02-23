@@ -69,6 +69,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(names).toContain('list_teams');
     expect(names).toContain('run_reliability_test');
     expect(names).toContain('get_pending_test_runs');
+    expect(names).toContain('estimate_test_suite_duration');
+    expect(names).toContain('set_service_schedule');
   });
 
   it('lists resource templates', async () => {
@@ -293,6 +295,93 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     }) as ToolResult;
     expect(result.isError).toBe(true);
   });
+
+  // ── Tool calls: scheduling ─────────────────────────────────────
+
+  it('estimate_test_suite_duration returns a duration breakdown for a real service', async () => {
+    expect(teamId).toBeDefined();
+    expect(serviceId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'estimate_test_suite_duration',
+      arguments: { teamId: teamId!, serviceId: serviceId! },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const estimate = parseToolResult(result) as {
+      serviceId: string;
+      teamId: string;
+      tests: Array<{ reliabilityTestId: string; expectedDurationSeconds: number }>;
+      totalDurationSeconds: number;
+      totalDurationMinutes: number;
+      totalDurationFormatted: string;
+      testCount: number;
+      note: string;
+    };
+    expect(estimate).toHaveProperty('serviceId', serviceId);
+    expect(estimate).toHaveProperty('teamId', teamId);
+    expect(Array.isArray(estimate.tests)).toBe(true);
+    expect(typeof estimate.totalDurationSeconds).toBe('number');
+    expect(typeof estimate.totalDurationMinutes).toBe('number');
+    expect(typeof estimate.totalDurationFormatted).toBe('string');
+    expect(estimate.testCount).toBe(estimate.tests.length);
+  });
+
+  it('estimate_test_suite_duration rejects missing required params', async () => {
+    const result = await client.callTool({
+      name: 'estimate_test_suite_duration',
+      arguments: { teamId: '', serviceId: '' },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('set_service_schedule is registered with correct schema', async () => {
+    const result = await client.listTools();
+    const tool = result.tools.find(t => t.name === 'set_service_schedule');
+    expect(tool).toBeDefined();
+    expect(tool!.description).toContain('schedule windows');
+  });
+
+  it('set_service_schedule rejects missing required params', async () => {
+    const result = await client.callTool({
+      name: 'set_service_schedule',
+      arguments: { teamId: '', serviceId: '', enabled: true, scheduleType: 'Random', triggerType: 'Always', triggers: [] },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('set_service_schedule can set a schedule on a real service', async () => {
+    expect(teamId).toBeDefined();
+    expect(serviceId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'set_service_schedule',
+      arguments: {
+        teamId: teamId!,
+        serviceId: serviceId!,
+        enabled: true,
+        scheduleType: 'Random',
+        triggerType: 'Always',
+        triggers: [
+          { dayOfWeek: 'M', scheduleWindows: [{ start: '09:00', end: '17:00' }] },
+          { dayOfWeek: 'W', scheduleWindows: [{ start: '09:00', end: '17:00' }] },
+          { dayOfWeek: 'F', scheduleWindows: [{ start: '09:00', end: '17:00' }] },
+        ],
+      },
+    }) as ToolResult;
+
+    // The API returns 400 if a test is currently running on the service
+    // (run_reliability_test fires earlier in this suite), so accept either
+    // a clean success or a "testing in progress" error.
+    if (result.isError) {
+      const text = result.content.find(c => c.type === 'text')?.text ?? '';
+      expect(text).toContain('testing is in progress');
+    } else {
+      const response = parseToolResult(result) as { success: boolean; summary: string };
+      expect(response.success).toBe(true);
+      expect(response.summary).toContain('enabled');
+    }
+  }, 15000);
 
   // ── Tool calls: pricing ──────────────────────────────────────────
 

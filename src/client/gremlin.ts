@@ -26,7 +26,7 @@ export interface Self {
 export interface ReliabilityReport {
     reliabilityScore: number;
     testSuiteId: string;
-    reliability: Map<string, ReliabilityCategorySummary>;
+    reliability: Record<string, ReliabilityCategorySummary>;
 }
 
 export interface ReliabilityCategorySummary {
@@ -167,6 +167,27 @@ export interface PricingReport {
 
 export type ReportPeriod = 'MONTHS' | 'WEEKS' | 'DAYS';
 
+export type DayOfWeek = 'M' | 'T' | 'W' | 'Th' | 'F' | 'S' | 'Su';
+export type ScheduleType = 'OnlyOnce' | 'Random';
+export type TriggerType = 'Passed' | 'RunOnce' | 'Always';
+
+export interface ScheduleWindow {
+  start: string; // HH:mm 24-hour
+  end: string;   // HH:mm 24-hour
+}
+
+export interface ScheduleTrigger {
+  dayOfWeek: DayOfWeek;
+  scheduleWindows: ScheduleWindow[]; // max 1 per day
+}
+
+export interface ScheduleSettings {
+  enabled: boolean;
+  scheduleType: ScheduleType;
+  triggerType: TriggerType;
+  triggers: ScheduleTrigger[];
+}
+
 export interface User { }
 
 export interface Team { 
@@ -178,7 +199,7 @@ export interface Team {
 
 export class GremlinApi {
   private baseUrl: string = 'https://api.gremlin.com/v1';
-  private userAgent = "@gremlin/gremlin-mcp/1.2.0";
+  private userAgent = "@gremlin/gremlin-mcp/1.3.0";
   private cache;
 
   constructor() {
@@ -344,6 +365,48 @@ export class GremlinApi {
         params: { serviceId, teamId },
       },
     );
+  }
+
+  async getActiveReliabilityTests(teamId: string): Promise<unknown[]> {
+    if (!teamId) {
+      throw new Error('teamId is required to fetch active reliability tests.');
+    }
+
+    return this.requestWithRetry<unknown[]>('reliability-tests/active', {
+      method: 'GET',
+      params: { teamId },
+    });
+  }
+
+  async updateServiceSchedule(
+    serviceId: string,
+    teamId: string,
+    scheduleSettings: ScheduleSettings,
+  ): Promise<void> {
+    if (!serviceId || !teamId) {
+      throw new Error('Both serviceId and teamId are required to update the service schedule.');
+    }
+
+    const url = new URL(`${this.baseUrl}/services/${serviceId}`);
+    url.searchParams.append('teamId', teamId);
+
+    const response = await fetch(url.toString(), {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Key ${process.env.GREMLIN_API_KEY}`,
+        'User-Agent': this.userAgent,
+      },
+      body: JSON.stringify({ scheduleSettings }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      const msg = body
+        ? `HTTP ${response.status}: ${body}`
+        : `HTTP error! status: ${response.status}`;
+      throw new Error(msg);
+    }
   }
 
   async getService(serviceId: string, teamId: string): Promise<Page<Service>> {
