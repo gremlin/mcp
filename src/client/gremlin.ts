@@ -85,6 +85,23 @@ interface DiagnosisResponse {
   suggestions: Suggestion[];
 }
 
+export interface PendingReliabilityTestRun {
+  reliabilityTestId: string;
+  reliabilityTestName: string;
+  dependencyId?: string;
+  dependencyName?: string;
+  failureFlagName?: string;
+  triggerSource: 'MANUAL' | 'RUN_ALL' | 'SCHEDULED' | 'RECURRING_SCHEDULE';
+  triggeredBy?: string;
+  expectedTriggerTime?: string;
+}
+
+export interface ReliabilityTestRunParameters {
+  serviceId: string;
+  dependencyId?: string;
+  failureFlagName?: string;
+}
+
 export interface ReliabilityTestRun {
   guid: string;
   serviceId: string;
@@ -161,7 +178,7 @@ export interface Team {
 
 export class GremlinApi {
   private baseUrl: string = 'https://api.gremlin.com/v1';
-  private userAgent = "@gremlin/gremlin-mcp/1.1.0";
+  private userAgent = "@gremlin/gremlin-mcp/1.2.0";
   private cache;
 
   constructor() {
@@ -292,6 +309,43 @@ export class GremlinApi {
     });
   }
 
+  async runReliabilityTest(
+    reliabilityTestId: string,
+    teamId: string,
+    params: ReliabilityTestRunParameters,
+  ): Promise<ReliabilityTestRun> {
+    if (!reliabilityTestId || !teamId || !params.serviceId) {
+      throw new Error('reliabilityTestId, teamId, and serviceId are required to run a reliability test.');
+    }
+
+    return this.requestWithRetry<ReliabilityTestRun>(
+      `reliability-tests/${reliabilityTestId}/runs`,
+      {
+        method: 'POST',
+        params: { teamId },
+        body: JSON.stringify(params),
+        skipCache: true,
+      },
+    );
+  }
+
+  async getPendingTestRuns(
+    serviceId: string,
+    teamId: string,
+  ): Promise<PendingReliabilityTestRun[]> {
+    if (!serviceId || !teamId) {
+      throw new Error('Both serviceId and teamId are required to fetch pending test runs.');
+    }
+
+    return this.requestWithRetry<PendingReliabilityTestRun[]>(
+      `reliability-tests/next-runs`,
+      {
+        method: 'GET',
+        params: { serviceId, teamId },
+      },
+    );
+  }
+
   async getService(serviceId: string, teamId: string): Promise<Page<Service>> {
     return this.requestWithRetry<Page<Service>>(`services/${serviceId}`, {
       method: 'GET',
@@ -348,9 +402,10 @@ export class GremlinApi {
     options: RequestInit & {
       params?: Record<string, any>;
       maxRetries?: number;
+      skipCache?: boolean;
     } = {},
   ): Promise<T> {
-    const { params, maxRetries = 3, ...fetchOptions } = options;
+    const { params, maxRetries = 3, skipCache = false, ...fetchOptions } = options;
     const url = new URL(`${this.baseUrl}/${path}`);
 
     if (params) {
@@ -358,7 +413,7 @@ export class GremlinApi {
     }
 
     const urlString = url.toString();
-    if (this.cache.has(urlString)) {
+    if (!skipCache && this.cache.has(urlString)) {
       return this.cache.get(urlString) as T;
     }
 
@@ -375,14 +430,26 @@ export class GremlinApi {
             },
         });
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const body = await response.text().catch(() => '');
+          const msg = body
+            ? `HTTP ${response.status}: ${body}`
+            : `HTTP error! status: ${response.status}`;
+
+          // 4xx errors are client-side, retrying won't help
+          if (response.status >= 400 && response.status < 500) {
+            throw Object.assign(new Error(msg), { noRetry: true });
+          }
+          throw new Error(msg);
         }
         const responseData =  await response.json() as T;
 
-        this.cache.set(urlString, responseData, 60 * 10); // Cache for 10 minutes
+        if (!skipCache) {
+          this.cache.set(urlString, responseData, 60 * 10); // Cache for 10 minutes
+        }
         return responseData;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        if ((lastError as any).noRetry) break;
       }
     }
 

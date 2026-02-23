@@ -1,5 +1,18 @@
 import z from "zod";
-import { GremlinApi } from "../client/gremlin";
+import { GremlinApi, ReliabilityTestRun } from "../client/gremlin";
+
+/**
+ * Strip the bulky ScenarioRunResponse down to the fields Claude actually
+ * needs for decision-making. The full `graph` (which can be enormous) is
+ * replaced with a compact summary.
+ */
+function summarizeScenarioRun(testRun: ReliabilityTestRun): ReliabilityTestRun {
+    const { graph: _graph, ...runSummary } = testRun.run;
+    return {
+        ...testRun,
+        run: runSummary as ReliabilityTestRun["run"],
+    };
+}
 
 export function createGetReliabilityExperimentTool(api: GremlinApi) {
     return {
@@ -8,27 +21,26 @@ export function createGetReliabilityExperimentTool(api: GremlinApi) {
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
             serviceId: z.string().describe("The ID of the service to retrieve the reliability experiment."),
-            dependendyId: z.string().optional().describe("The ID of the dependency to retrieve the reliability experiment for, if applicable."),
+            dependencyId: z.string().optional().describe("The ID of the dependency to retrieve the reliability experiment for, if applicable."),
             testId: z.string().optional().describe("The ID of the reliability test to retrieve the experiment for, if applicable."),
             limit: z.number().optional().describe("The maximum number of results to return. Defaults to 100."),
+            includeScenarioRun: z.boolean().optional().describe("Include the full scenario run graph data. Defaults to false. Only set to true when you need detailed step-by-step execution data."),
         },
-        handler: async (args: { serviceId: string, teamId: string, dependencyId?: string, testId?: string, limit?: number }) => {
-            const { serviceId, teamId, dependencyId, testId, limit } = args;
+        handler: async (args: { serviceId: string, teamId: string, dependencyId?: string, testId?: string, limit?: number, includeScenarioRun?: boolean }) => {
+            const { serviceId, teamId, dependencyId, testId, limit, includeScenarioRun } = args;
             if (!serviceId || !teamId) {
                 throw new Error(`got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`);
             }
 
             try {
                 const results = await api.getReliabilityExperiment(serviceId, teamId, dependencyId, testId, limit);
+                if (includeScenarioRun) {
+                    return results;
+                }
                 if ("items" in results) {
-                    results.items = results.items.map(run => {
-                        // Delete extraneous data to save on data transfer
-                        run.run.graph.nodesRecursive = []
-                        return run;
-                    })
+                    results.items = results.items.map(summarizeScenarioRun);
                 } else {
-                    // Delete extraneous data to save on data transfer
-                    results.run.graph.nodesRecursive = [];
+                    return summarizeScenarioRun(results);
                 }
                 return results;
             } catch (error) {
@@ -98,6 +110,83 @@ export function createGetCurrentTestSuiteTool(api: GremlinApi) {
             } catch (error) {
                 console.error(`Error fetching current test suite`, error);
                 throw new Error(`Failed to fetch current test suite: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+    }
+}
+
+export function createRunReliabilityTestTool(api: GremlinApi) {
+    return {
+        name: "run_reliability_test",
+        description: [
+            "Run a reliability test for a service.",
+            "Use get_reliability_report to discover valid reliabilityTestId, dependencyId, and failureFlagName values for a service.",
+            "You can also extract these parameters from a previous reliability test run (via get_reliability_experiments) to rerun a test.",
+            "Requires the SERVICES_RUN privilege.",
+            "This call may fail with HTTP 400 if a test is already running or scheduled for the service.",
+            "When this happens, use get_pending_test_runs to see what is queued and wait for it to finish before retrying.",
+        ].join(" "),
+        schema: {
+            teamId: z.string().describe("The ID of the team that owns the service."),
+            serviceId: z.string().describe("The ID of the service to run the reliability test against."),
+            reliabilityTestId: z.string().describe("The ID of the reliability test to run. Found in the reliability report's policyStates as 'reliabilityTestId'."),
+            dependencyId: z.string().optional().describe("The ID of the dependency to target, if the test is a dependency test. Found in the reliability report's policyStates."),
+            failureFlagName: z.string().optional().describe("The name of the failure flag to target, if the test uses failure flags. Found in the reliability report's policyStates."),
+            includeScenarioRun: z.boolean().optional().describe("Include the full scenario run graph data. Defaults to false. Only set to true when you need detailed step-by-step execution data."),
+        },
+        annotations: {
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+        },
+        handler: async (args: { teamId: string, serviceId: string, reliabilityTestId: string, dependencyId?: string, failureFlagName?: string, includeScenarioRun?: boolean }) => {
+            const { teamId, serviceId, reliabilityTestId, dependencyId, failureFlagName, includeScenarioRun } = args;
+            if (!teamId || !serviceId || !reliabilityTestId) {
+                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string, serviceId: string, reliabilityTestId: string }`);
+            }
+
+            try {
+                const result = await api.runReliabilityTest(reliabilityTestId, teamId, {
+                    serviceId,
+                    dependencyId,
+                    failureFlagName,
+                });
+                if (includeScenarioRun) {
+                    return result;
+                }
+                return summarizeScenarioRun(result);
+            } catch (error) {
+                console.error(`Error running reliability test`, error);
+                throw new Error(`Failed to run reliability test: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+    }
+}
+
+export function createGetPendingTestRunsTool(api: GremlinApi) {
+    return {
+        name: "get_pending_test_runs",
+        description: [
+            "Get pending reliability test runs for a service, ordered by expected trigger time.",
+            "Shows tests queued via schedule, Run All, or manual trigger that have not yet started.",
+            "Use this to check whether a test is already queued before calling run_reliability_test,",
+            "or to understand why run_reliability_test returned a 400 error.",
+        ].join(" "),
+        schema: {
+            teamId: z.string().describe("The ID of the team that owns the service."),
+            serviceId: z.string().describe("The ID of the service to check for pending test runs."),
+        },
+        handler: async (args: { teamId: string, serviceId: string }) => {
+            const { teamId, serviceId } = args;
+            if (!teamId || !serviceId) {
+                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string, serviceId: string }`);
+            }
+
+            try {
+                return await api.getPendingTestRuns(serviceId, teamId);
+            } catch (error) {
+                console.error(`Error fetching pending test runs`, error);
+                throw new Error(`Failed to fetch pending test runs: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
     }
