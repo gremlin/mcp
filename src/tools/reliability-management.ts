@@ -123,6 +123,8 @@ export function createRunReliabilityTestTool(api: GremlinApi) {
             "Use get_reliability_report to discover valid reliabilityTestId, dependencyId, and failureFlagName values for a service.",
             "You can also extract these parameters from a previous reliability test run (via get_reliability_experiments) to rerun a test.",
             "Requires the SERVICES_RUN privilege.",
+            "This call may fail with HTTP 400 if a test is already running or scheduled for the service.",
+            "When this happens, use get_pending_test_runs to see what is queued and wait for it to finish before retrying.",
         ].join(" "),
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
@@ -156,6 +158,35 @@ export function createRunReliabilityTestTool(api: GremlinApi) {
             } catch (error) {
                 console.error(`Error running reliability test`, error);
                 throw new Error(`Failed to run reliability test: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+    }
+}
+
+export function createGetPendingTestRunsTool(api: GremlinApi) {
+    return {
+        name: "get_pending_test_runs",
+        description: [
+            "Get pending reliability test runs for a service, ordered by expected trigger time.",
+            "Shows tests queued via schedule, Run All, or manual trigger that have not yet started.",
+            "Use this to check whether a test is already queued before calling run_reliability_test,",
+            "or to understand why run_reliability_test returned a 400 error.",
+        ].join(" "),
+        schema: {
+            teamId: z.string().describe("The ID of the team that owns the service."),
+            serviceId: z.string().describe("The ID of the service to check for pending test runs."),
+        },
+        handler: async (args: { teamId: string, serviceId: string }) => {
+            const { teamId, serviceId } = args;
+            if (!teamId || !serviceId) {
+                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string, serviceId: string }`);
+            }
+
+            try {
+                return await api.getPendingTestRuns(serviceId, teamId);
+            } catch (error) {
+                console.error(`Error fetching pending test runs`, error);
+                throw new Error(`Failed to fetch pending test runs: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
     }

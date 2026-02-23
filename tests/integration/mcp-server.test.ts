@@ -68,6 +68,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(names).toContain('list_services');
     expect(names).toContain('list_teams');
     expect(names).toContain('run_reliability_test');
+    expect(names).toContain('get_pending_test_runs');
   });
 
   it('lists resource templates', async () => {
@@ -265,6 +266,30 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     const result = await client.callTool({
       name: 'run_reliability_test',
       arguments: { teamId: '', serviceId: '', reliabilityTestId: '' },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  // ── Tool calls: pending test runs ────────────────────────────────
+
+  it('get_pending_test_runs returns an array for a valid service', async () => {
+    expect(teamId).toBeDefined();
+    expect(serviceId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'get_pending_test_runs',
+      arguments: { teamId: teamId!, serviceId: serviceId! },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const pending = parseToolResult(result);
+    expect(Array.isArray(pending)).toBe(true);
+  });
+
+  it('get_pending_test_runs rejects missing required params', async () => {
+    const result = await client.callTool({
+      name: 'get_pending_test_runs',
+      arguments: { teamId: '', serviceId: '' },
     }) as ToolResult;
     expect(result.isError).toBe(true);
   });

@@ -85,6 +85,17 @@ interface DiagnosisResponse {
   suggestions: Suggestion[];
 }
 
+export interface PendingReliabilityTestRun {
+  reliabilityTestId: string;
+  reliabilityTestName: string;
+  dependencyId?: string;
+  dependencyName?: string;
+  failureFlagName?: string;
+  triggerSource: 'MANUAL' | 'RUN_ALL' | 'SCHEDULED' | 'RECURRING_SCHEDULE';
+  triggeredBy?: string;
+  expectedTriggerTime?: string;
+}
+
 export interface ReliabilityTestRunParameters {
   serviceId: string;
   dependencyId?: string;
@@ -318,6 +329,23 @@ export class GremlinApi {
     );
   }
 
+  async getPendingTestRuns(
+    serviceId: string,
+    teamId: string,
+  ): Promise<PendingReliabilityTestRun[]> {
+    if (!serviceId || !teamId) {
+      throw new Error('Both serviceId and teamId are required to fetch pending test runs.');
+    }
+
+    return this.requestWithRetry<PendingReliabilityTestRun[]>(
+      `reliability-tests/next-runs`,
+      {
+        method: 'GET',
+        params: { serviceId, teamId },
+      },
+    );
+  }
+
   async getService(serviceId: string, teamId: string): Promise<Page<Service>> {
     return this.requestWithRetry<Page<Service>>(`services/${serviceId}`, {
       method: 'GET',
@@ -402,7 +430,16 @@ export class GremlinApi {
             },
         });
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const body = await response.text().catch(() => '');
+          const msg = body
+            ? `HTTP ${response.status}: ${body}`
+            : `HTTP error! status: ${response.status}`;
+
+          // 4xx errors are client-side, retrying won't help
+          if (response.status >= 400 && response.status < 500) {
+            throw Object.assign(new Error(msg), { noRetry: true });
+          }
+          throw new Error(msg);
         }
         const responseData =  await response.json() as T;
 
@@ -412,6 +449,7 @@ export class GremlinApi {
         return responseData;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        if ((lastError as any).noRetry) break;
       }
     }
 
