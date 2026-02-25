@@ -9,8 +9,11 @@ inspector:
 	npx -y @modelcontextprotocol/inspector npx -y tsx main.ts
 
 build: install
-	npx tsc --noEmit \
-		&& npx esbuild src/main.ts --bundle --platform=node --format=esm --outfile=build/main.mjs
+    npx tsc --noEmit \
+       && npx esbuild src/main.ts --bundle --platform=node --format=esm --outfile=build/main.mjs \
+       --external:@modelcontextprotocol/sdk \
+       --external:@stacksjs/ts-cache \
+       --external:zod
 
 test: build
 	npx vitest run
