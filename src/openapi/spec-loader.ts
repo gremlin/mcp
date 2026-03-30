@@ -44,19 +44,24 @@ export interface EndpointMatch {
 
 const SPEC_URL = 'https://api.gremlin.com/v1/openapi.json';
 const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch'] as const;
+const SPEC_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 let cachedSpec: OpenApiSpec | null = null;
+let cachedAt = 0;
 let specFetchPromise: Promise<OpenApiSpec> | null = null;
 
 // Lazily fetches and caches the Gremlin OpenAPI spec. Concurrent callers share
 // a single in-flight request rather than hammering the spec endpoint.
+// The cache expires after SPEC_TTL_MS so long-lived servers (e.g. Claude Desktop)
+// pick up spec changes without needing a restart.
 export async function getSpec(): Promise<OpenApiSpec> {
-  if (cachedSpec) return cachedSpec;
+  if (cachedSpec && Date.now() - cachedAt < SPEC_TTL_MS) return cachedSpec;
 
   if (!specFetchPromise) {
     specFetchPromise = fetchSpec()
       .then(spec => {
         cachedSpec = spec;
+        cachedAt = Date.now();
         specFetchPromise = null;
         return spec;
       })
