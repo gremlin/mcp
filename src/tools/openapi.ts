@@ -1,6 +1,7 @@
 import z from 'zod';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { GremlinApi } from '../client/gremlin';
-import { getSpec, searchSpec } from '../openapi/spec-loader';
+import { getSpec, searchSpec, OpenApiSpec } from '../openapi/spec-loader';
 
 export function createSearchGremlinApiTool(_api: GremlinApi) {
   return {
@@ -70,7 +71,23 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
   };
 }
 
-export function createExecuteGremlinApiTool(api: GremlinApi) {
+// Returns the *_RUN privileges required by the given endpoint, or [] if none.
+function getRunPrivileges(spec: OpenApiSpec, specPath: string, method: string): string[] {
+  const op = spec.paths[specPath]?.[method.toLowerCase()];
+  if (!op?.security) return [];
+
+  const privileges: string[] = [];
+  for (const secReq of op.security as Array<Record<string, string[]>>) {
+    for (const perms of Object.values(secReq)) {
+      for (const perm of perms) {
+        if (perm.endsWith('_RUN')) privileges.push(perm);
+      }
+    }
+  }
+  return privileges;
+}
+
+export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServer) {
   return {
     name: 'execute_gremlin_api',
     description: [
@@ -118,9 +135,54 @@ export function createExecuteGremlinApiTool(api: GremlinApi) {
     }) => {
       const { method, path: rawPath, pathParams, queryParams, body } = args;
 
+      // Normalize the spec path: always leading slash, no substitutions yet.
+      const specPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+
+      // Check if this endpoint requires a *_RUN permission. Best-effort: if the
+      // spec isn't cached yet, fetch it; if unavailable, skip the check.
+      try {
+        const spec = await getSpec();
+        const runPrivileges = getRunPrivileges(spec, specPath, method);
+
+        if (runPrivileges.length > 0) {
+          const result = await mcpServer.server.elicitInput({
+            message:
+              `This endpoint requires the ${runPrivileges.join(', ')} privilege(s), which can ` +
+              `trigger live chaos experiments. Do you want to proceed?\n\n` +
+              `Endpoint: ${method} ${specPath}`,
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                confirmed: {
+                  type: 'boolean',
+                  title: 'Proceed with execution',
+                  description: 'Set to true to confirm you want to run this endpoint.',
+                  default: false,
+                },
+              },
+              required: ['confirmed'],
+            },
+          });
+
+          if (result.action !== 'accept' || !result.content?.['confirmed']) {
+            throw new Error(
+              `Execution cancelled (action: ${result.action}). The request was not sent to Gremlin.`,
+            );
+          }
+        }
+      } catch (err) {
+        // Re-throw cancellations and elicitation errors as-is
+        if (err instanceof Error && err.message.startsWith('Execution cancelled')) throw err;
+        // For spec/network failures, log and continue — don't block all execute calls
+        // just because the spec is temporarily unreachable.
+        console.error(
+          `Warning: could not check permissions for ${method} ${specPath}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
       // Strip leading slash — GremlinApi base URL is https://api.gremlin.com/v1
       // and requestWithRetry constructs `${baseUrl}/${path}`, so no leading slash wanted.
-      let resolvedPath = rawPath.startsWith('/') ? rawPath.slice(1) : rawPath;
+      let resolvedPath = specPath.slice(1);
 
       if (pathParams) {
         for (const [key, value] of Object.entries(pathParams)) {

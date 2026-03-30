@@ -35,7 +35,7 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createGetAttackSummaryTool(api),
 
     createSearchGremlinApiTool(api),
-    createExecuteGremlinApiTool(api),
+    createExecuteGremlinApiTool(api, server),
   ];
 
   // Register each tool with the server

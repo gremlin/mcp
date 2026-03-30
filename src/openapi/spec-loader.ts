@@ -14,6 +14,7 @@ export interface Operation {
   tags?: string[];
   parameters?: Parameter[];
   requestBody?: RequestBody;
+  security?: Array<Record<string, string[]>>;
 }
 
 export interface Parameter {
