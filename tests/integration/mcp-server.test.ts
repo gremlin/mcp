@@ -69,6 +69,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(names).toContain('list_teams');
     expect(names).toContain('run_reliability_test');
     expect(names).toContain('get_pending_test_runs');
+    expect(names).toContain('search_gremlin_api');
+    expect(names).toContain('execute_gremlin_api');
   });
 
   it('lists resource templates', async () => {

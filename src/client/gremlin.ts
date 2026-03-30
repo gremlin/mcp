@@ -397,6 +397,20 @@ export class GremlinApi {
     });
   }
 
+  async execute<T = unknown>(
+    method: string,
+    path: string,
+    queryParams?: Record<string, string>,
+    body?: Record<string, unknown>,
+  ): Promise<T> {
+    return this.requestWithRetry<T>(path, {
+      method: method.toUpperCase(),
+      params: queryParams,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      skipCache: true, // always skip cache — write ops & novel reads
+    });
+  }
+
   private async requestWithRetry<T>(
     path: string,
     options: RequestInit & {
