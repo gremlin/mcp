@@ -178,7 +178,7 @@ export interface Team {
 
 export class GremlinApi {
   private baseUrl: string = 'https://api.gremlin.com/v1';
-  private userAgent = "@gremlin/gremlin-mcp/1.2.0";
+  private userAgent = "@gremlin/gremlin-mcp/2.0.0";
   private cache;
 
   constructor() {
@@ -394,6 +394,20 @@ export class GremlinApi {
   async getSelf(): Promise<Self> {
     return this.requestWithRetry<Self>('users/self', {
       method: 'GET',
+    });
+  }
+
+  async execute<T = unknown>(
+    method: string,
+    path: string,
+    queryParams?: Record<string, string>,
+    body?: Record<string, unknown>,
+  ): Promise<T> {
+    return this.requestWithRetry<T>(path, {
+      method: method.toUpperCase(),
+      params: queryParams,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      skipCache: true, // always skip cache — write ops & novel reads
     });
   }
 
