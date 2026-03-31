@@ -82,7 +82,40 @@ async function fetchSpec(): Promise<OpenApiSpec> {
   return res.json() as Promise<OpenApiSpec>;
 }
 
+// Score a single token against the searchable fields of one endpoint.
+// Weights: path/operationId = 3, summary/tags = 2, description = 1.
+function scoreToken(token: string, pathLower: string, op: Operation): number {
+  let score = 0;
+  if (pathLower.includes(token)) score += 3;
+  if (op.operationId?.toLowerCase().includes(token)) score += 3;
+  if (op.summary?.toLowerCase().includes(token)) score += 2;
+  if (op.tags?.some(t => t.toLowerCase().includes(token))) score += 2;
+  if (op.description?.toLowerCase().includes(token)) score += 1;
+  return score;
+}
+
+// Tokenize a query into lowercase words. Splits on whitespace and common
+// non-word separators (/, -, _, {, }) so that a natural-language query like
+// "failure-flags experiments run" produces ["failure", "flags", "experiments", "run"]
+// while still preserving tokens that are meaningful as whole words.
+function tokenize(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[\s/\-_{}]+/)
+    .filter(t => t.length > 0);
+}
+
 // Searches the spec by weighted keyword scoring. Returns top `topN` matches.
+//
+// The query is scored two ways and the results are combined:
+//   1. Full-phrase match — the entire query is treated as a substring (good for
+//      exact path fragments like "/runs").
+//   2. Token match — the query is split into words; each token is scored
+//      independently and the scores are summed. This handles multi-word queries
+//      like "failure-flags experiments run" that don't appear verbatim in any
+//      single field but whose parts each do.
+//
+// An endpoint must score > 0 on at least one strategy to appear in results.
 export function searchSpec(
   spec: OpenApiSpec,
   query: string,
@@ -91,6 +124,7 @@ export function searchSpec(
   topN = 10,
 ): EndpointMatch[] {
   const queryLower = query.toLowerCase();
+  const tokens = tokenize(query);
   const methodLower = methodFilter?.toLowerCase();
   const tagLower = tagFilter?.toLowerCase();
 
@@ -104,15 +138,27 @@ export function searchSpec(
       if (methodLower && method !== methodLower) continue;
       if (tagLower && !op.tags?.some(t => t.toLowerCase().includes(tagLower))) continue;
 
-      let score = 0;
       const pathLower = path.toLowerCase();
 
-      if (pathLower.includes(queryLower)) score += 3;
-      if (op.operationId?.toLowerCase().includes(queryLower)) score += 3;
-      if (op.summary?.toLowerCase().includes(queryLower)) score += 2;
-      if (op.tags?.some(t => t.toLowerCase().includes(queryLower))) score += 2;
-      if (op.description?.toLowerCase().includes(queryLower)) score += 1;
+      // Strategy 1: full-phrase score (original behavior).
+      const phraseScore = scoreToken(queryLower, pathLower, op);
 
+      // Strategy 2: per-token score — sum across all tokens, but only count
+      // an endpoint if every token matches at least once somewhere (AND logic).
+      // This avoids surfacing noisy partial matches for long queries.
+      let tokenScore = 0;
+      let allTokensMatched = true;
+      for (const token of tokens) {
+        const ts = scoreToken(token, pathLower, op);
+        if (ts === 0) {
+          allTokensMatched = false;
+          break;
+        }
+        tokenScore += ts;
+      }
+      if (!allTokensMatched) tokenScore = 0;
+
+      const score = Math.max(phraseScore, tokenScore);
       if (score === 0) continue;
 
       scored.push({
