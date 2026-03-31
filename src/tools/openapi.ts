@@ -72,7 +72,7 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
 }
 
 // Returns the *_RUN privileges required by the given endpoint, or [] if none.
-function getRunPrivileges(spec: OpenApiSpec, specPath: string, method: string): string[] {
+export function getRunPrivileges(spec: OpenApiSpec, specPath: string, method: string): string[] {
   const op = spec.paths[specPath]?.[method.toLowerCase()];
   if (!op?.security) return [];
 
@@ -120,6 +120,14 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
         .record(z.unknown())
         .optional()
         .describe('Request body for POST/PUT/PATCH requests.'),
+      confirmExecution: z
+        .boolean()
+        .optional()
+        .describe(
+          'Set to true to explicitly confirm execution of endpoints that require a *_RUN privilege, ' +
+          'bypassing the interactive elicitation prompt. Use this when your MCP client does not ' +
+          'support elicitation. Only set this after verifying the endpoint and parameters.',
+        ),
     },
     annotations: {
       destructiveHint: true,
@@ -132,20 +140,32 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
       pathParams?: Record<string, string>;
       queryParams?: Record<string, string>;
       body?: Record<string, unknown>;
+      confirmExecution?: boolean;
     }) => {
-      const { method, path: rawPath, pathParams, queryParams, body } = args;
+      const { method, path: rawPath, pathParams, queryParams, body, confirmExecution } = args;
 
       // Normalize the spec path: always leading slash, no substitutions yet.
       const specPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
 
-      // Check if this endpoint requires a *_RUN permission. Best-effort: if the
-      // spec isn't cached yet, fetch it; if unavailable, skip the check.
+      // Check if this endpoint requires a *_RUN permission.
+      // Spec fetch is best-effort: if the spec is temporarily unreachable we log
+      // and continue rather than blocking every execute call. Elicitation errors
+      // are NOT swallowed — if the confirmation prompt fails or is unsupported,
+      // we must block the call rather than silently proceed.
+      let runPrivileges: string[] = [];
       try {
         const spec = await getSpec();
-        const runPrivileges = getRunPrivileges(spec, specPath, method);
+        runPrivileges = getRunPrivileges(spec, specPath, method);
+      } catch (err) {
+        console.error(
+          `Warning: could not load spec to check permissions for ${method} ${specPath}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
 
-        if (runPrivileges.length > 0) {
-          const result = await mcpServer.server.elicitInput({
+      if (runPrivileges.length > 0 && !confirmExecution) {
+        let result;
+        try {
+          result = await mcpServer.server.elicitInput({
             message:
               `This endpoint requires the ${runPrivileges.join(', ')} privilege(s), which can ` +
               `trigger live chaos experiments. Do you want to proceed?\n\n` +
@@ -163,21 +183,21 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
               required: ['confirmed'],
             },
           });
-
-          if (result.action !== 'accept' || !result.content?.['confirmed']) {
-            throw new Error(
-              `Execution cancelled (action: ${result.action}). The request was not sent to Gremlin.`,
-            );
-          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `Cannot confirm execution of ${method} ${specPath}: the MCP client does not support ` +
+            `interactive prompts (elicitation). This endpoint requires the ` +
+            `${runPrivileges.join(', ')} privilege(s). Pass confirmExecution: true to bypass ` +
+            `the prompt and proceed directly. (${msg})`,
+          );
         }
-      } catch (err) {
-        // Re-throw cancellations and elicitation errors as-is
-        if (err instanceof Error && err.message.startsWith('Execution cancelled')) throw err;
-        // For spec/network failures, log and continue — don't block all execute calls
-        // just because the spec is temporarily unreachable.
-        console.error(
-          `Warning: could not check permissions for ${method} ${specPath}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+
+        if (result.action !== 'accept' || !result.content?.['confirmed']) {
+          throw new Error(
+            `Execution cancelled (action: ${result.action}). The request was not sent to Gremlin.`,
+          );
+        }
       }
 
       // Strip leading slash — GremlinApi base URL is https://api.gremlin.com/v1
