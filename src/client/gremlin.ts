@@ -1,4 +1,4 @@
-import cache, { Cache } from '@stacksjs/ts-cache';
+import TTLCache from '@isaacs/ttlcache';
 
 
 export interface Team {
@@ -179,13 +179,7 @@ export interface Team {
 export class GremlinApi {
   private baseUrl: string = 'https://api.gremlin.com/v1';
   private userAgent = "@gremlin/gremlin-mcp/2.2.0";
-  private cache;
-
-  constructor() {
-    this.cache = new Cache({
-          useClones: true,
-        })
-  }
+  private cache = new TTLCache<string, unknown>();
 
   async listUsers(): Promise<User[]> {
     return this.requestWithRetry<User[]>('users', {
@@ -458,7 +452,7 @@ export class GremlinApi {
         const responseData =  await response.json() as T;
 
         if (!skipCache) {
-          this.cache.set(urlString, responseData, 60 * 10); // Cache for 10 minutes
+          this.cache.set(urlString, responseData, { ttl: 10 * 60 * 1000 }); // Cache for 10 minutes
         }
         return responseData;
       } catch (error) {
