@@ -1,9 +1,9 @@
 import z from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { GremlinApi } from '../client/gremlin';
+import type { GremlinClient } from '../client/interface';
 import { getSpec, searchSpec, OpenApiSpec } from '../openapi/spec-loader';
 
-export function createSearchGremlinApiTool(_api: GremlinApi) {
+export function createSearchGremlinApiTool(_api: GremlinClient) {
   return {
     name: 'search_gremlin_api',
     description: [
@@ -87,7 +87,7 @@ export function getRunPrivileges(spec: OpenApiSpec, specPath: string, method: st
   return privileges;
 }
 
-export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServer) {
+export function createExecuteGremlinApiTool(api: GremlinClient, mcpServer: McpServer) {
   return {
     name: 'execute_gremlin_api',
     description: [

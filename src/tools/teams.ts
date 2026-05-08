@@ -1,7 +1,7 @@
-import { GremlinApi } from "../client/gremlin";
+import type { GremlinClient } from "../client/interface";
 
 
-export function createListTeamsTool(api: GremlinApi) {
+export function createListTeamsTool(api: GremlinClient) {
     return {
         name: "list_teams",
         description: "Lists all teams you have access to",

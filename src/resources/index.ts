@@ -1,5 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { GremlinApi, Self, Service, Team } from "../client/gremlin";
+import type { GremlinClient } from "../client/interface";
+import type { Self, Service, Team } from "../types";
 
 /**
  * Interface for MCP resource items
@@ -18,7 +19,7 @@ interface ResourceItem {
  * @param server - The MCP server instance
  * @param api - The Gremlin API client
  */
-export function registerResources(server: McpServer, api: GremlinApi) {
+export function registerResources(server: McpServer, api: GremlinClient) {
   server.resource(
     "teams",
     new ResourceTemplate("gremlin://team/{teamId}", {

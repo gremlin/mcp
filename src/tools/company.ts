@@ -1,5 +1,6 @@
 import z from "zod";
-import { GremlinApi, type ReportPeriod } from "../client/gremlin";
+import type { GremlinClient } from "../client/interface";
+import type { ReportPeriod } from "../types";
 
 const reportPeriodSchema = z.enum(["MONTHS", "WEEKS", "DAYS"]);
 
@@ -7,7 +8,7 @@ const teamIdSchema = z.string().describe(
     "The team identifier. Use the list_teams tool to find available teams and match by name or ID."
 );
 
-export function createGetPricingReportTool(api: GremlinApi) {
+export function createGetPricingReportTool(api: GremlinClient) {
     return {
         name: "get_pricing_report",
         description: "Fetches the pricing usage report for the company over a specified date range. Returns usage broken down by tracking period including active agents, targetable applications, and unique targets by type (host, container, application).",
@@ -31,7 +32,7 @@ export function createGetPricingReportTool(api: GremlinApi) {
     }
 }
 
-export function createGetClientSummaryTool(api: GremlinApi) {
+export function createGetClientSummaryTool(api: GremlinClient) {
     return {
         name: "get_client_summary",
         description: "Loads the client (agent) summary for a team over a specified time period. Shows agent activity and status. Requires a teamId, use the list_teams tool first to find available teams.",
@@ -56,7 +57,7 @@ export function createGetClientSummaryTool(api: GremlinApi) {
     }
 }
 
-export function createGetAttackSummaryTool(api: GremlinApi) {
+export function createGetAttackSummaryTool(api: GremlinClient) {
     return {
         name: "get_attack_summary",
         description: "Loads the attack summary for a team over a specified time period. Shows attack activity and results. Requires a teamId, use the list_teams tool first to find available teams.",

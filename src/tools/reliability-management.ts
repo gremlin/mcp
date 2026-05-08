@@ -1,5 +1,6 @@
 import z from "zod";
-import { GremlinApi, ReliabilityTestRun } from "../client/gremlin";
+import type { GremlinClient } from "../client/interface";
+import type { ReliabilityTestRun } from "../types";
 
 /**
  * Strip the bulky ScenarioRunResponse down to the fields Claude actually
@@ -14,7 +15,7 @@ function summarizeScenarioRun(testRun: ReliabilityTestRun): ReliabilityTestRun {
     };
 }
 
-export function createGetReliabilityExperimentTool(api: GremlinApi) {
+export function createGetReliabilityExperimentTool(api: GremlinClient) {
     return {
         name: "get_reliability_experiments",
         description: "Retrieves recent reliability experiment for a specific service.",
@@ -51,7 +52,7 @@ export function createGetReliabilityExperimentTool(api: GremlinApi) {
     }
 }
 
-export function createGetReliabilityReportTool(api: GremlinApi) {
+export function createGetReliabilityReportTool(api: GremlinClient) {
     return {
         name: "get_reliability_report",
         description: "Retrieves the reliability report for a specific service.",
@@ -76,7 +77,7 @@ export function createGetReliabilityReportTool(api: GremlinApi) {
     }
 }
 
-export function createGetCurrentTestSuiteTool(api: GremlinApi) {
+export function createGetCurrentTestSuiteTool(api: GremlinClient) {
     return {
         name: "get_current_test_suite",
         description: "Retrieves the current test suite for a specific team. Or all if no team is specified.",
@@ -115,7 +116,7 @@ export function createGetCurrentTestSuiteTool(api: GremlinApi) {
     }
 }
 
-export function createRunReliabilityTestTool(api: GremlinApi) {
+export function createRunReliabilityTestTool(api: GremlinClient) {
     return {
         name: "run_reliability_test",
         description: [
@@ -163,7 +164,7 @@ export function createRunReliabilityTestTool(api: GremlinApi) {
     }
 }
 
-export function createGetPendingTestRunsTool(api: GremlinApi) {
+export function createGetPendingTestRunsTool(api: GremlinClient) {
     return {
         name: "get_pending_test_runs",
         description: [
@@ -192,7 +193,7 @@ export function createGetPendingTestRunsTool(api: GremlinApi) {
     }
 }
 
-export function createGetRecentReliabilityTestsTool(api: GremlinApi) {
+export function createGetRecentReliabilityTestsTool(api: GremlinClient) {
     return {
         name: "get_recent_reliability_tests",
         description: "Retrieves recent reliability tests for a given team.",

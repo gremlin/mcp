@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { GremlinApi } from "../client/gremlin";
+import type { GremlinClient } from "../client/interface";
 import { createGetCurrentTestSuiteTool, createGetPendingTestRunsTool, createGetRecentReliabilityTestsTool, createGetReliabilityExperimentTool, createGetReliabilityReportTool, createRunReliabilityTestTool } from "./reliability-management";
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
 import { createListTeamsTool } from "./teams";
@@ -14,7 +14,7 @@ interface Tool {
   handler: (args: any, extra: any) => Promise<any>;
 }
 
-export function registerTools(server: McpServer, api: GremlinApi) {
+export function registerTools(server: McpServer, api: GremlinClient) {
   const tools: Tool[] = [
     createListServicesTool(api),
     createGetServiceDependenciesTool(api),

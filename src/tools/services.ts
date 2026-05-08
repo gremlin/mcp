@@ -1,8 +1,9 @@
 import z from "zod";
-import { GremlinApi, Self, Service } from "../client/gremlin";
+import type { GremlinClient } from "../client/interface";
+import type { Self, Service } from "../types";
 
 
-export function createGetServiceDependenciesTool(api: GremlinApi) {
+export function createGetServiceDependenciesTool(api: GremlinClient) {
     return {
         name: "get_service_dependencies",
         description: "Retrieves the service dependencies for a specific service.",
@@ -26,7 +27,7 @@ export function createGetServiceDependenciesTool(api: GremlinApi) {
     }
 }
 
-export function createListServiceRisksTool(api: GremlinApi) {
+export function createListServiceRisksTool(api: GremlinClient) {
     return {
         name: "list_service_risks",
         description: "Lists the risks associated with a specific service.",
@@ -49,7 +50,7 @@ export function createListServiceRisksTool(api: GremlinApi) {
     }
 }
 
-export function createGetServiceStatusChecksTool(api: GremlinApi) {
+export function createGetServiceStatusChecksTool(api: GremlinClient) {
     return {
         name: "get_service_status_checks",
         description: "Retrieves the status checks for a specific service.",
@@ -72,7 +73,7 @@ export function createGetServiceStatusChecksTool(api: GremlinApi) {
     }
 }
 
-export function createListServicesTool(api: GremlinApi) {
+export function createListServicesTool(api: GremlinClient) {
   return {
     name: "list_services",
     description: "Lists available reliability management services (RM Services for short). Returns service names, descriptions, score, and targeting information.",

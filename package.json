@@ -2,9 +2,16 @@
   "name": "@gremlin/mcp-server",
   "version": "2.2.1",
   "description": "Gremlin MCP Server",
-  "main": "build/main.mjs",
+  "main": "build/index.mjs",
+  "types": "build/index.d.ts",
   "bin": "build/main.mjs",
   "type": "module",
+  "exports": {
+    ".": {
+      "import": "./build/index.mjs",
+      "types": "./build/index.d.ts"
+    }
+  },
   "files": [
     "build",
     "README.md"
