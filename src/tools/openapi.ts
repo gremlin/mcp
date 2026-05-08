@@ -1,6 +1,6 @@
 import z from 'zod';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { GremlinClient } from '../client/interface';
+import type { ElicitationClient } from '../elicitation';
 import { getSpec, searchSpec, OpenApiSpec } from '../openapi/spec-loader';
 
 export function createSearchGremlinApiTool(_api: GremlinClient) {
@@ -87,7 +87,7 @@ export function getRunPrivileges(spec: OpenApiSpec, specPath: string, method: st
   return privileges;
 }
 
-export function createExecuteGremlinApiTool(api: GremlinClient, mcpServer: McpServer) {
+export function createExecuteGremlinApiTool(api: GremlinClient, elicitation: ElicitationClient) {
   return {
     name: 'execute_gremlin_api',
     description: [
@@ -163,40 +163,29 @@ export function createExecuteGremlinApiTool(api: GremlinClient, mcpServer: McpSe
       }
 
       if (runPrivileges.length > 0 && !confirmExecution) {
-        let result;
+        let answer: string;
         try {
-          result = await mcpServer.server.elicitInput({
-            message:
-              `This endpoint requires the ${runPrivileges.join(', ')} privilege(s), which can ` +
-              `trigger live chaos experiments. Do you want to proceed?\n\n` +
-              `Endpoint: ${method} ${specPath}`,
-            requestedSchema: {
-              type: 'object',
-              properties: {
-                confirmed: {
-                  type: 'boolean',
-                  title: 'Proceed with execution',
-                  description: 'Set to true to confirm you want to run this endpoint.',
-                  default: false,
-                },
-              },
-              required: ['confirmed'],
-            },
-          });
+          answer = await elicitation.confirm(
+            `This endpoint requires the **${runPrivileges.join(', ')}** privilege(s), which can ` +
+            `trigger live chaos experiments. Do you want to proceed?\n\n` +
+            `**Endpoint:** \`${method} ${specPath}\``,
+            [
+              { label: 'Execute', value: 'confirmed', description: 'Proceed with the API call.' },
+              { label: 'Cancel', value: 'cancelled', description: 'Abort without making the request.' },
+            ],
+          );
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           throw new Error(
-            `Cannot confirm execution of ${method} ${specPath}: the MCP client does not support ` +
-            `interactive prompts (elicitation). This endpoint requires the ` +
+            `Cannot confirm execution of ${method} ${specPath}: the runtime does not support ` +
+            `interactive prompts. This endpoint requires the ` +
             `${runPrivileges.join(', ')} privilege(s). Pass confirmExecution: true to bypass ` +
             `the prompt and proceed directly. (${msg})`,
           );
         }
 
-        if (result.action !== 'accept' || !result.content?.['confirmed']) {
-          throw new Error(
-            `Execution cancelled (action: ${result.action}). The request was not sent to Gremlin.`,
-          );
+        if (answer !== 'confirmed') {
+          throw new Error(`Execution cancelled. The request was not sent to Gremlin.`);
         }
       }
 

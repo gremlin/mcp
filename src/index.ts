@@ -1,4 +1,6 @@
 export type { GremlinClient } from './client/interface';
+export type { ElicitationClient, ElicitationOption } from './elicitation';
+export { McpElicitationClient } from './elicitation';
 
 export type {
   Page,

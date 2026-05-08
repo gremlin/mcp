@@ -100,12 +100,12 @@ describe('getRunPrivileges', () => {
 
 // ── execute_gremlin_api handler — elicitation behaviour ───────────────────
 
-function makeMockServer(elicitResponse: { action: string; content?: Record<string, unknown> }) {
-  return {
-    server: {
-      elicitInput: vi.fn().mockResolvedValue(elicitResponse),
-    },
-  };
+function makeMockElicitation(returnValue: string) {
+  return { confirm: vi.fn().mockResolvedValue(returnValue) };
+}
+
+function makeMockElicitationThrowing(error: Error) {
+  return { confirm: vi.fn().mockRejectedValue(error) };
 }
 
 function makeMockApi() {
@@ -120,9 +120,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   });
 
   it('prompts for confirmation when the endpoint requires a _RUN privilege', async () => {
-    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockElicitation = makeMockElicitation('confirmed');
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, mockElicitation);
 
     await tool.handler({
       method: 'POST',
@@ -131,16 +131,15 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
       queryParams: { teamId: 'team-1' },
     });
 
-    expect(mockServer.server.elicitInput).toHaveBeenCalledOnce();
-    const call = mockServer.server.elicitInput.mock.calls[0][0];
-    expect(call.message).toContain('EXPERIMENTS_RUN');
-    expect(call.message).toContain('POST /failure-flags/experiments/{id}/run');
+    expect(mockElicitation.confirm).toHaveBeenCalledOnce();
+    const [prompt] = mockElicitation.confirm.mock.calls[0];
+    expect(prompt).toContain('EXPERIMENTS_RUN');
+    expect(prompt).toContain('POST /failure-flags/experiments/{id}/run');
   });
 
   it('proceeds with the API call when the user confirms', async () => {
-    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, makeMockElicitation('confirmed'));
 
     await tool.handler({
       method: 'POST',
@@ -152,10 +151,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
     expect(mockApi.execute).toHaveBeenCalledOnce();
   });
 
-  it('throws and does NOT call the API when the user declines (confirmed: false)', async () => {
-    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: false } });
+  it('throws and does NOT call the API when the user cancels', async () => {
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, makeMockElicitation('cancelled'));
 
     await expect(
       tool.handler({
@@ -169,10 +167,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
     expect(mockApi.execute).not.toHaveBeenCalled();
   });
 
-  it('throws and does NOT call the API when the user dismisses the dialog (action: decline)', async () => {
-    const mockServer = makeMockServer({ action: 'decline' });
+  it('throws and does NOT call the API when elicitation returns an unexpected value', async () => {
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, makeMockElicitation('something-else'));
 
     await expect(
       tool.handler({
@@ -187,25 +184,22 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   });
 
   it('skips elicitation entirely for endpoints without _RUN privileges', async () => {
-    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockElicitation = makeMockElicitation('confirmed');
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, mockElicitation);
 
     await tool.handler({ method: 'GET', path: '/failure-flags/experiments' });
 
-    expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
+    expect(mockElicitation.confirm).not.toHaveBeenCalled();
     expect(mockApi.execute).toHaveBeenCalledOnce();
   });
 
-  it('blocks the call when elicitInput throws (e.g. client does not support elicitation)', async () => {
-    // Claude Desktop raises MCP error -32601 when elicitation is unsupported.
-    const mockServer = {
-      server: {
-        elicitInput: vi.fn().mockRejectedValue(new Error('MCP error -32601: Method not found')),
-      },
-    };
+  it('blocks the call when confirm throws (e.g. runtime does not support elicitation)', async () => {
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(
+      mockApi as never,
+      makeMockElicitationThrowing(new Error('MCP error -32601: Method not found')),
+    );
 
     await expect(
       tool.handler({
@@ -214,18 +208,16 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
         pathParams: { id: 'exp-123' },
         queryParams: { teamId: 'team-1' },
       }),
-    ).rejects.toThrow('MCP client does not support interactive prompts');
+    ).rejects.toThrow('runtime does not support interactive prompts');
 
     expect(mockApi.execute).not.toHaveBeenCalled();
   });
 
   it('error message hints at confirmExecution when elicitation is unsupported', async () => {
-    const mockServer = {
-      server: {
-        elicitInput: vi.fn().mockRejectedValue(new Error('MCP error -32601: Method not found')),
-      },
-    };
-    const tool = createExecuteGremlinApiTool(makeMockApi() as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(
+      makeMockApi() as never,
+      makeMockElicitationThrowing(new Error('MCP error -32601: Method not found')),
+    );
 
     const err = await tool.handler({
       method: 'POST',
@@ -238,9 +230,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   });
 
   it('skips elicitation and proceeds when confirmExecution is true', async () => {
-    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockElicitation = makeMockElicitation('confirmed');
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, mockElicitation);
 
     await tool.handler({
       method: 'POST',
@@ -250,14 +242,14 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
       confirmExecution: true,
     });
 
-    expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
+    expect(mockElicitation.confirm).not.toHaveBeenCalled();
     expect(mockApi.execute).toHaveBeenCalledOnce();
   });
 
   it('does not skip elicitation when confirmExecution is false', async () => {
-    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockElicitation = makeMockElicitation('confirmed');
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, mockElicitation);
 
     await tool.handler({
       method: 'POST',
@@ -267,18 +259,18 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
       confirmExecution: false,
     });
 
-    expect(mockServer.server.elicitInput).toHaveBeenCalledOnce();
+    expect(mockElicitation.confirm).toHaveBeenCalledOnce();
   });
 
   it('skips elicitation for endpoints with only non-_RUN permissions', async () => {
-    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockElicitation = makeMockElicitation('confirmed');
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createExecuteGremlinApiTool(mockApi as never, mockElicitation);
 
     // POST /failure-flags/experiments requires EXPERIMENTS_WRITE, not a _RUN permission
     await tool.handler({ method: 'POST', path: '/failure-flags/experiments', body: {} });
 
-    expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
+    expect(mockElicitation.confirm).not.toHaveBeenCalled();
     expect(mockApi.execute).toHaveBeenCalledOnce();
   });
 });

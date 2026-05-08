@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GremlinClient } from "../client/interface";
+import { McpElicitationClient } from "../elicitation";
 import { createGetCurrentTestSuiteTool, createGetPendingTestRunsTool, createGetRecentReliabilityTestsTool, createGetReliabilityExperimentTool, createGetReliabilityReportTool, createRunReliabilityTestTool } from "./reliability-management";
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
 import { createListTeamsTool } from "./teams";
@@ -35,7 +36,7 @@ export function registerTools(server: McpServer, api: GremlinClient) {
     createGetAttackSummaryTool(api),
 
     createSearchGremlinApiTool(api),
-    createExecuteGremlinApiTool(api, server),
+    createExecuteGremlinApiTool(api, new McpElicitationClient(server)),
   ];
 
   // Register each tool with the server
