@@ -1,15 +1,27 @@
 {
-  "name": "gremlin-mcp",
+  "name": "@gremlin/mcp-server",
   "version": "2.2.0",
-  "main": "main.ts",
+  "description": "Gremlin MCP Server",
+  "main": "build/main.mjs",
+  "bin": "build/main.mjs",
   "type": "module",
+  "files": [
+    "build",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gremlin/mcp.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "vitest run"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.15.0",
     "@stacksjs/ts-cache": "^0.1.2",
