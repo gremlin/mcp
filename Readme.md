@@ -38,6 +38,19 @@ Go to Claude Settings > Developer and add the following to your `claude_desktop_
 
 ### VS Code / Cursor
 
+> Requires [VS Code 1.99](https://code.visualstudio.com/updates/v1_99) or higher (MCP support was added in the March 2025 release). See also: [Cursor MCP docs](https://cursor.com/docs/mcp).
+
+Open your MCP Settings:
+ - Cursor: `Cmd+Shift+P` → search "Cursor Settings" → Tools & Integrations → Add Custom MCP
+ - VSCode: `Cmd+Shift+P` → type "MCP: Open User Configuration"
+
+Or directly edit them:
+ - Cursor (Mac/Linux): `~/.cursor/mcp.json`
+ - Cursor (Win): `%USERPROFILE%\.cursor\mcp.json`
+ - VSCode (Mac): `~/Library/Application Support/Code/User/mcp.json`
+ - VSCode (Win): `%APPDATA%\Code\User\mcp.json`
+ - VSCode (Linux): `~/.config/Code/User/mcp.json`
+
 Add the following to your MCP settings:
 
 ```json
@@ -62,6 +75,7 @@ Add the following to your MCP settings:
   ]
 }
 ```
+
 
 ## Available Tools
 
