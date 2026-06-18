@@ -11,6 +11,7 @@ export function createGetPricingReportTool(api: GremlinApi) {
     return {
         name: "get_pricing_report",
         description: "Fetches the pricing usage report for the company over a specified date range. Returns usage broken down by tracking period including active agents, targetable applications, and unique targets by type (host, container, application).",
+        annotations: { readOnlyHint: true },
         schema: {
             startDate: z.string().describe("Start date (yyyy-mm-dd) for the pricing usage. Should be within the current contract duration."),
             endDate: z.string().describe("End date (yyyy-mm-dd) for the pricing usage. Should be within the current contract duration."),
@@ -35,6 +36,7 @@ export function createGetClientSummaryTool(api: GremlinApi) {
     return {
         name: "get_client_summary",
         description: "Loads the client (agent) summary for a team over a specified time period. Shows agent activity and status. Requires a teamId, use the list_teams tool first to find available teams.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: teamIdSchema,
             start: z.string().describe("Start date (yyyy-mm-dd) for the report."),
@@ -60,6 +62,7 @@ export function createGetAttackSummaryTool(api: GremlinApi) {
     return {
         name: "get_attack_summary",
         description: "Loads the attack summary for a team over a specified time period. Shows attack activity and results. Requires a teamId, use the list_teams tool first to find available teams.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: teamIdSchema,
             start: z.string().describe("Start date (yyyy-mm-dd) for the report."),

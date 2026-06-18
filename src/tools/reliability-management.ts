@@ -18,6 +18,7 @@ export function createGetReliabilityExperimentTool(api: GremlinApi) {
     return {
         name: "get_reliability_experiments",
         description: "Retrieves recent reliability experiment for a specific service.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
             serviceId: z.string().describe("The ID of the service to retrieve the reliability experiment."),
@@ -55,6 +56,7 @@ export function createGetReliabilityReportTool(api: GremlinApi) {
     return {
         name: "get_reliability_report",
         description: "Retrieves the reliability report for a specific service.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
             serviceId: z.string().describe("The ID of the service to retrieve the reliability report."),
@@ -80,6 +82,7 @@ export function createGetCurrentTestSuiteTool(api: GremlinApi) {
     return {
         name: "get_current_test_suite",
         description: "Retrieves the current test suite for a specific team. Or all if no team is specified.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: z.string().optional().describe("The ID of the team you're examining the current test suite for."),
         },
@@ -135,6 +138,7 @@ export function createRunReliabilityTestTool(api: GremlinApi) {
             includeScenarioRun: z.boolean().optional().describe("Include the full scenario run graph data. Defaults to false. Only set to true when you need detailed step-by-step execution data."),
         },
         annotations: {
+            readOnlyHint: false,
             destructiveHint: true,
             idempotentHint: false,
             openWorldHint: true,
@@ -166,6 +170,7 @@ export function createRunReliabilityTestTool(api: GremlinApi) {
 export function createGetPendingTestRunsTool(api: GremlinApi) {
     return {
         name: "get_pending_test_runs",
+        annotations: { readOnlyHint: true },
         description: [
             "Get pending reliability test runs for a service, ordered by expected trigger time.",
             "Shows tests queued via schedule, Run All, or manual trigger that have not yet started.",
@@ -196,6 +201,7 @@ export function createGetRecentReliabilityTestsTool(api: GremlinApi) {
     return {
         name: "get_recent_reliability_tests",
         description: "Retrieves recent reliability tests for a given team.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
             pageSize: z.number().optional().describe("The maximum number of results to return. Defaults to 5."),

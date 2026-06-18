@@ -38,25 +38,22 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createExecuteGremlinApiTool(api, server),
   ];
 
-  // Register each tool with the server
   for (const tool of tools) {
-    // Register the tool with the server using type assertion to bypass TypeScript's strict type checking
-    server.tool(
+    server.registerTool(
       tool.name,
-      tool.description,
-      tool.schema, 
-      //tool.annotations || { example: "annotation"},
+      {
+        description: tool.description,
+        inputSchema: tool.schema as any,
+        annotations: tool.annotations as any,
+      },
       async (args: Record<string, any>, extra: any) => {
         try {
-          // Use type assertion to satisfy TypeScript's type checking
           const result = await tool.handler(args, extra);
 
-          // If the result already has the expected format, return it directly
           if (result && typeof result === 'object' && 'content' in result) {
             return result as any;
           }
 
-          // Otherwise, format the result as expected by the SDK
           return {
             content: [
               {
@@ -66,7 +63,6 @@ export function registerTools(server: McpServer, api: GremlinApi) {
             ],
           } as any;
         } catch (error) {
-          // Format errors to match the SDK's expected format
           return {
             content: [
               {
