@@ -6,6 +6,7 @@ export function createGetServiceDependenciesTool(api: GremlinApi) {
     return {
         name: "get_service_dependencies",
         description: "Retrieves the service dependencies for a specific service.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
             serviceId: z.string().describe("The ID of the service to retrieve the dependencies for"),
@@ -30,6 +31,7 @@ export function createListServiceRisksTool(api: GremlinApi) {
     return {
         name: "list_service_risks",
         description: "Lists the risks associated with a specific service.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
             serviceId: z.string().describe("The ID of the service to retrieve risks for."),
@@ -53,6 +55,7 @@ export function createGetServiceStatusChecksTool(api: GremlinApi) {
     return {
         name: "get_service_status_checks",
         description: "Retrieves the status checks for a specific service.",
+        annotations: { readOnlyHint: true },
         schema: {
             teamId: z.string().describe("The ID of the team that owns the service."),
             serviceId: z.string().describe("The ID of the service to retrieve status checks for."),
@@ -76,17 +79,8 @@ export function createListServicesTool(api: GremlinApi) {
   return {
     name: "list_services",
     description: "Lists available reliability management services (RM Services for short). Returns service names, descriptions, score, and targeting information.",
-    schema: {
-        "$schema":"https://json-schema.org/draft/2020-12/schema",
-        "type":"object",
-        "properties":{}
-    },
-    /**
-     * Handles the list_services tool request with pagination and search
-     *
-     * @param params -  none currently, but will be extended for pagination 
-     * @returns list of services with their details
-     */
+    annotations: { readOnlyHint: true },
+    schema: {},
     handler: async (params: { } ) => {
       try {
           const self : Self = await api.getSelf();

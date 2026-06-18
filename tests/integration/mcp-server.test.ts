@@ -349,9 +349,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_pricing_report rejects missing dates at the schema level', async () => {
-    await expect(
-      client.callTool({ name: 'get_pricing_report', arguments: {} })
-    ).rejects.toThrow();
+    const result = await client.callTool({ name: 'get_pricing_report', arguments: {} }) as ToolResult;
+    expect(result.isError).toBe(true);
   });
 
   // ── Tool calls: team reports ─────────────────────────────────────
@@ -373,9 +372,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_client_summary rejects missing params at the schema level', async () => {
-    await expect(
-      client.callTool({ name: 'get_client_summary', arguments: {} })
-    ).rejects.toThrow();
+    const result = await client.callTool({ name: 'get_client_summary', arguments: {} }) as ToolResult;
+    expect(result.isError).toBe(true);
   });
 
   it('get_attack_summary returns a response for a real team', async () => {
@@ -395,9 +393,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_attack_summary rejects missing params at the schema level', async () => {
-    await expect(
-      client.callTool({ name: 'get_attack_summary', arguments: {} })
-    ).rejects.toThrow();
+    const result = await client.callTool({ name: 'get_attack_summary', arguments: {} }) as ToolResult;
+    expect(result.isError).toBe(true);
   });
 
   // ── Error handling ─────────────────────────────────────────────────

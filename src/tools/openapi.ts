@@ -13,6 +13,7 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
       'Paths use OpenAPI template syntax (e.g. /reliability-tests/{reliabilityTestId}/runs) —',
       'pass them directly to execute_gremlin_api.',
     ].join(' '),
+    annotations: { readOnlyHint: true },
     schema: {
       query: z.string().describe(
         'Text to search for in endpoint paths, summaries, operationIds, tags, and descriptions.',
@@ -130,7 +131,8 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
         ),
     },
     annotations: {
-      destructiveHint: true,
+      readOnlyHint: false,
+      destructiveHint: false,
       idempotentHint: false,
       openWorldHint: true,
     },

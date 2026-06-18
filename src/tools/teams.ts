@@ -6,6 +6,7 @@ export function createListTeamsTool(api: GremlinApi) {
         name: "list_teams",
         description: "Lists all teams you have access to",
         schema: {},
+        annotations: { readOnlyHint: true },
         handler: async () => {
             try {
                 return await api.listTeams();
