@@ -178,7 +178,7 @@ export interface Team {
 
 export class GremlinApi {
   private baseUrl: string = 'https://api.gremlin.com/v1';
-  private userAgent = "@gremlin/gremlin-mcp/2.2.0";
+  private userAgent = "@gremlin/gremlin-mcp/2.2.2";
   private cache = new TTLCache<string, unknown>();
 
   async listUsers(): Promise<User[]> {
