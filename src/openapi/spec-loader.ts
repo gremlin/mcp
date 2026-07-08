@@ -1,3 +1,5 @@
+import { getServiceUrl } from '../config';
+
 // Minimal OpenAPI 3.0 types — only what we actually traverse
 export interface OpenApiSpec {
   paths: Record<string, PathItem>;
@@ -42,7 +44,7 @@ export interface EndpointMatch {
   requestBody?: RequestBody;
 }
 
-const SPEC_URL = 'https://api.gremlin.com/v1/openapi.json';
+const SPEC_PATH = 'openapi.json';
 const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch'] as const;
 const SPEC_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -75,7 +77,7 @@ export async function getSpec(): Promise<OpenApiSpec> {
 }
 
 async function fetchSpec(): Promise<OpenApiSpec> {
-  const res = await fetch(SPEC_URL);
+  const res = await fetch(`${getServiceUrl()}/${SPEC_PATH}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch Gremlin OpenAPI spec: HTTP ${res.status}`);
   }

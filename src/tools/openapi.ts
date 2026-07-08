@@ -202,8 +202,8 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
         }
       }
 
-      // Strip leading slash — GremlinApi base URL is https://api.gremlin.com/v1
-      // and requestWithRetry constructs `${baseUrl}/${path}`, so no leading slash wanted.
+      // Strip leading slash — GremlinApi base URL already includes the version
+      // prefix and requestWithRetry constructs `${baseUrl}/${path}`, so no leading slash wanted.
       let resolvedPath = specPath.slice(1);
 
       if (pathParams) {
