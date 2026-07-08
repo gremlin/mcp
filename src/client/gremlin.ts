@@ -1,4 +1,5 @@
 import TTLCache from '@isaacs/ttlcache';
+import { getServiceUrl } from '../config';
 
 
 export interface Team {
@@ -177,8 +178,8 @@ export interface Team {
 }
 
 export class GremlinApi {
-  private baseUrl: string = 'https://api.gremlin.com/v1';
-  private userAgent = "@gremlin/gremlin-mcp/2.2.2";
+  private baseUrl: string = getServiceUrl();
+  private userAgent = "@gremlin/gremlin-mcp/2.3.0";
   private cache = new TTLCache<string, unknown>();
 
   async listUsers(): Promise<User[]> {

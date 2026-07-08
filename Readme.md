@@ -18,6 +18,13 @@ This MCP server provides access to Gremlin's reliability testing and management 
 - Node.js 18 or higher
 - A valid [Gremlin API key](https://app.gremlin.com/settings/api-keys)
 
+### Environment Variables
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `GREMLIN_API_KEY` | Yes | — | Your Gremlin API key. The server exits immediately if this is missing. |
+| `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
+
 ### Claude Desktop
 
 Go to Claude Settings > Developer and add the following to your `claude_desktop_config.json`:
