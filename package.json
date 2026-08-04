@@ -36,7 +36,7 @@
   "overrides": {
     "vite": "7.3.5",
     "rollup": "4.60.4",
-    "postcss": "8.5.14",
+    "postcss": "8.5.25",
     "picomatch": "4.0.4"
   }
 }
