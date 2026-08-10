@@ -1,5 +1,5 @@
 import z from "zod";
-import { GremlinApi, Self, Service } from "../client/gremlin";
+import { assertRequiredParams, GremlinApi, Self, Service, wrapGremlinError } from "../client/gremlin";
 
 
 export function createGetServiceDependenciesTool(api: GremlinApi) {
@@ -13,15 +13,16 @@ export function createGetServiceDependenciesTool(api: GremlinApi) {
         },
         handler: async (args: { serviceId: string, teamId: string }) => {
             const { serviceId, teamId } = args;
-            if (!serviceId || !teamId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`);
-            }
+            assertRequiredParams(
+                Boolean(serviceId) && Boolean(teamId),
+                `got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`,
+            );
 
             try {
                 return await api.getServiceDependencies(serviceId, teamId);
             } catch (error) {
                 console.error(`Error fetching service dependencies`, error);
-                throw new Error(`Failed to fetch service dependencies: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch service dependencies', error);
             }
         }
     }
@@ -38,14 +39,15 @@ export function createListServiceRisksTool(api: GremlinApi) {
         },
         handler: async (args: { serviceId: string, teamId: string }) => {
             const { serviceId, teamId } = args;
-            if (!serviceId || !teamId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`);
-            }
+            assertRequiredParams(
+                Boolean(serviceId) && Boolean(teamId),
+                `got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`,
+            );
             try {
                 return await api.getServiceRisks(serviceId, teamId);
             } catch (error) {
                 console.error(`Error fetching service risks`, error);
-                throw new Error(`Failed to fetch service risks: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch service risks', error);
             }
         }
     }
@@ -62,14 +64,15 @@ export function createGetServiceStatusChecksTool(api: GremlinApi) {
         },
         handler: async (args: { serviceId: string, teamId: string }) => {
             const { serviceId, teamId } = args;
-            if (!serviceId || !teamId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`);
-            }
+            assertRequiredParams(
+                Boolean(serviceId) && Boolean(teamId),
+                `got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`,
+            );
             try {
                 return await api.getServiceStatusChecks(serviceId, teamId);
             } catch (error) {
                 console.error(`Error fetching service status checks`, error);
-                throw new Error(`Failed to fetch service status checks: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch service status checks', error);
             }
         }
     }
@@ -97,7 +100,7 @@ export function createListServicesTool(api: GremlinApi) {
           return services;
       } catch (error) {
         console.error(`Error fetching services`, error);
-        throw new Error(`Failed to fetch services: ${error instanceof Error ? error.message : String(error)}`);
+        throw wrapGremlinError('Failed to fetch services', error);
       }
 
     }

@@ -1,6 +1,6 @@
 {
   "name": "@gremlin/mcp-server",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Gremlin MCP Server",
   "main": "build/main.mjs",
   "bin": "build/main.mjs",

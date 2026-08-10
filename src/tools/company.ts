@@ -1,5 +1,5 @@
 import z from "zod";
-import { GremlinApi, type ReportPeriod } from "../client/gremlin";
+import { assertRequiredParams, GremlinApi, type ReportPeriod, wrapGremlinError } from "../client/gremlin";
 
 const reportPeriodSchema = z.enum(["MONTHS", "WEEKS", "DAYS"]);
 
@@ -19,14 +19,15 @@ export function createGetPricingReportTool(api: GremlinApi) {
         },
         handler: async (args: { startDate: string; endDate: string; trackingPeriod?: "Daily" | "Weekly" | "Monthly" }) => {
             const { startDate, endDate, trackingPeriod } = args;
-            if (!startDate || !endDate) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { startDate: string, endDate: string, trackingPeriod?: "Daily" | "Weekly" | "Monthly" }`);
-            }
+            assertRequiredParams(
+                Boolean(startDate) && Boolean(endDate),
+                `got ${JSON.stringify(args)} but expected { startDate: string, endDate: string, trackingPeriod?: "Daily" | "Weekly" | "Monthly" }`,
+            );
 
             try {
                 return await api.getPricingReport(startDate, endDate, trackingPeriod);
             } catch (error) {
-                throw new Error(`Failed to fetch pricing report: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch pricing report', error);
             }
         }
     }
@@ -45,14 +46,15 @@ export function createGetClientSummaryTool(api: GremlinApi) {
         },
         handler: async (args: { teamId: string; start: string; end: string; period: ReportPeriod }) => {
             const { teamId, start, end, period } = args;
-            if (!teamId || !start || !end || !period) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string, start: string, end: string, period: "MONTHS" | "WEEKS" | "DAYS" }`);
-            }
+            assertRequiredParams(
+                Boolean(teamId) && Boolean(start) && Boolean(end) && Boolean(period),
+                `got ${JSON.stringify(args)} but expected { teamId: string, start: string, end: string, period: "MONTHS" | "WEEKS" | "DAYS" }`,
+            );
 
             try {
                 return await api.getClientSummary(teamId, start, end, period);
             } catch (error) {
-                throw new Error(`Failed to fetch client summary: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch client summary', error);
             }
         }
     }
@@ -71,14 +73,15 @@ export function createGetAttackSummaryTool(api: GremlinApi) {
         },
         handler: async (args: { teamId: string; start: string; end: string; period: ReportPeriod }) => {
             const { teamId, start, end, period } = args;
-            if (!teamId || !start || !end || !period) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string, start: string, end: string, period: "MONTHS" | "WEEKS" | "DAYS" }`);
-            }
+            assertRequiredParams(
+                Boolean(teamId) && Boolean(start) && Boolean(end) && Boolean(period),
+                `got ${JSON.stringify(args)} but expected { teamId: string, start: string, end: string, period: "MONTHS" | "WEEKS" | "DAYS" }`,
+            );
 
             try {
                 return await api.getAttackSummary(teamId, start, end, period);
             } catch (error) {
-                throw new Error(`Failed to fetch attack summary: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch attack summary', error);
             }
         }
     }

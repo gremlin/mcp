@@ -1,4 +1,4 @@
-import { GremlinApi } from "../client/gremlin";
+import { GremlinApi, wrapGremlinError } from "../client/gremlin";
 
 
 export function createListTeamsTool(api: GremlinApi) {
@@ -12,7 +12,7 @@ export function createListTeamsTool(api: GremlinApi) {
                 return await api.listTeams();
             } catch (error) {
                 console.error(`Error fetching teams`, error);
-                throw new Error(`Failed to fetch teams: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch teams', error);
             }
         }
     }
