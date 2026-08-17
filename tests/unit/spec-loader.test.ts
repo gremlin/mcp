@@ -45,6 +45,13 @@ const MOCK_SPEC: OpenApiSpec = {
         parameters: [
           { name: 'reliabilityTestId', in: 'path', required: true, schema: { type: 'string' } },
         ],
+        responses: {
+          '202': {
+            description: 'Accepted',
+            content: { 'text/plain': { schema: { type: 'string' } } },
+          },
+          '400': { description: 'Bad request' },
+        },
       },
     },
     '/teams': {
@@ -129,6 +136,26 @@ describe('searchSpec', () => {
     it('respects the limit parameter', () => {
       const results = searchSpec(MOCK_SPEC, 'experiment', undefined, undefined, 2);
       expect(results.length).toBeLessThanOrEqual(2);
+    });
+  });
+
+  describe('response summaries', () => {
+    it('summarizes each response down to description and content-types', () => {
+      const results = searchSpec(MOCK_SPEC, 'runReliabilityTest');
+      expect(results[0].responses).toEqual({
+        '202': { description: 'Accepted', content: { 'text/plain': {} } },
+        '400': { description: 'Bad request' },
+      });
+    });
+
+    it('strips schema/examples/encoding nested under each media type', () => {
+      const results = searchSpec(MOCK_SPEC, 'runReliabilityTest');
+      expect(results[0].responses?.['202'].content?.['text/plain']).toEqual({});
+    });
+
+    it('omits responses when the operation has none', () => {
+      const results = searchSpec(MOCK_SPEC, 'listTeams');
+      expect(results[0].responses).toBeUndefined();
     });
   });
 });

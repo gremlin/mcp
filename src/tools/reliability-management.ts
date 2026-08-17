@@ -1,5 +1,5 @@
 import z from "zod";
-import { GremlinApi, ReliabilityTestRun } from "../client/gremlin";
+import { assertRequiredParams, GremlinApi, GremlinApiError, ReliabilityTestRun, wrapGremlinError } from "../client/gremlin";
 
 /**
  * Strip the bulky ScenarioRunResponse down to the fields Claude actually
@@ -29,9 +29,10 @@ export function createGetReliabilityExperimentTool(api: GremlinApi) {
         },
         handler: async (args: { serviceId: string, teamId: string, dependencyId?: string, testId?: string, limit?: number, includeScenarioRun?: boolean }) => {
             const { serviceId, teamId, dependencyId, testId, limit, includeScenarioRun } = args;
-            if (!serviceId || !teamId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`);
-            }
+            assertRequiredParams(
+                Boolean(serviceId) && Boolean(teamId),
+                `got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`,
+            );
 
             try {
                 const results = await api.getReliabilityExperiment(serviceId, teamId, dependencyId, testId, limit);
@@ -46,7 +47,7 @@ export function createGetReliabilityExperimentTool(api: GremlinApi) {
                 return results;
             } catch (error) {
                 console.error(`Error fetching reliability report`, error);
-                throw new Error(`Failed to fetch reliability report: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch reliability report', error);
             }
         }
     }
@@ -64,15 +65,16 @@ export function createGetReliabilityReportTool(api: GremlinApi) {
         },
         handler: async (args: { serviceId: string, teamId: string, date?: string }) => {
             const { serviceId, teamId, date } = args;
-            if (!serviceId || !teamId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`);
-            }
+            assertRequiredParams(
+                Boolean(serviceId) && Boolean(teamId),
+                `got ${JSON.stringify(args)} but expected { serviceId: string, teamId: string }`,
+            );
 
             try {
                 return  await api.getReliabilityReport(serviceId, teamId, date);
             } catch (error) {
                 console.error(`Error fetching reliability report`, error);
-                throw new Error(`Failed to fetch reliability report: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch reliability report', error);
             }
         }
     }
@@ -86,7 +88,7 @@ export function createGetCurrentTestSuiteTool(api: GremlinApi) {
         schema: {
             teamId: z.string().optional().describe("The ID of the team you're examining the current test suite for."),
         },
-        handler: async (args: { teamId: string }) => {
+        handler: async (args: { teamId?: string }) => {
             const { teamId } = args;
 
             try {
@@ -96,7 +98,9 @@ export function createGetCurrentTestSuiteTool(api: GremlinApi) {
                 }
 
                 if (!testSuites || !Array.isArray(testSuites)) {
-                    throw new Error("No test suites found or invalid format.");
+                    // The API call succeeded but returned a shape we didn't expect —
+                    // not something the caller's teamId argument could have caused.
+                    throw new GremlinApiError("No test suites found or invalid format.", { isInputError: false });
                 }
 
                 if (testSuites.length === 0) {
@@ -105,14 +109,15 @@ export function createGetCurrentTestSuiteTool(api: GremlinApi) {
 
                 // Filter test suites by teamId
                 if (!testSuites.some(suite => suite.targetTeamIds.includes(teamId))) {
-                    throw new Error(`No test suites found for team ID: ${teamId}`);
+                    // A different teamId could plausibly return results.
+                    throw new GremlinApiError(`No test suites found for team ID: ${teamId}`, { isInputError: true });
                 }
 
-                // Return only test suites that target the specified team       
+                // Return only test suites that target the specified team
                 return testSuites.filter(suite => suite.targetTeamIds.includes(teamId));
             } catch (error) {
                 console.error(`Error fetching current test suite`, error);
-                throw new Error(`Failed to fetch current test suite: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch current test suite', error);
             }
         }
     }
@@ -145,9 +150,10 @@ export function createRunReliabilityTestTool(api: GremlinApi) {
         },
         handler: async (args: { teamId: string, serviceId: string, reliabilityTestId: string, dependencyId?: string, failureFlagName?: string, includeScenarioRun?: boolean }) => {
             const { teamId, serviceId, reliabilityTestId, dependencyId, failureFlagName, includeScenarioRun } = args;
-            if (!teamId || !serviceId || !reliabilityTestId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string, serviceId: string, reliabilityTestId: string }`);
-            }
+            assertRequiredParams(
+                Boolean(teamId) && Boolean(serviceId) && Boolean(reliabilityTestId),
+                `got ${JSON.stringify(args)} but expected { teamId: string, serviceId: string, reliabilityTestId: string }`,
+            );
 
             try {
                 const result = await api.runReliabilityTest(reliabilityTestId, teamId, {
@@ -161,7 +167,7 @@ export function createRunReliabilityTestTool(api: GremlinApi) {
                 return summarizeScenarioRun(result);
             } catch (error) {
                 console.error(`Error running reliability test`, error);
-                throw new Error(`Failed to run reliability test: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to run reliability test', error);
             }
         }
     }
@@ -183,15 +189,16 @@ export function createGetPendingTestRunsTool(api: GremlinApi) {
         },
         handler: async (args: { teamId: string, serviceId: string }) => {
             const { teamId, serviceId } = args;
-            if (!teamId || !serviceId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string, serviceId: string }`);
-            }
+            assertRequiredParams(
+                Boolean(teamId) && Boolean(serviceId),
+                `got ${JSON.stringify(args)} but expected { teamId: string, serviceId: string }`,
+            );
 
             try {
                 return await api.getPendingTestRuns(serviceId, teamId);
             } catch (error) {
                 console.error(`Error fetching pending test runs`, error);
-                throw new Error(`Failed to fetch pending test runs: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch pending test runs', error);
             }
         }
     }
@@ -210,9 +217,7 @@ export function createGetRecentReliabilityTestsTool(api: GremlinApi) {
         handler: async (args: { teamId: string, pageSize?: number, pageToken?: string }) => {
             const { teamId, pageSize, pageToken } = args;
             let limit = pageSize;
-            if (!teamId) {
-                throw new Error(`got ${JSON.stringify(args)} but expected { teamId: string }`);
-            }
+            assertRequiredParams(Boolean(teamId), `got ${JSON.stringify(args)} but expected { teamId: string }`);
 
             if (!limit) {
                 limit = 5;
@@ -222,7 +227,7 @@ export function createGetRecentReliabilityTestsTool(api: GremlinApi) {
                 return await api.getRecentReliabilityTests(teamId, limit, pageToken);
             } catch (error) {
                 console.error(`Error fetching recent reliability tests`, error);
-                throw new Error(`Failed to fetch recent reliability tests: ${error instanceof Error ? error.message : String(error)}`);
+                throw wrapGremlinError('Failed to fetch recent reliability tests', error);
             }
         }
     }

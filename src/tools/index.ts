@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { GremlinApi } from "../client/gremlin";
+import { GremlinApi, GremlinApiError } from "../client/gremlin";
 import { createGetCurrentTestSuiteTool, createGetPendingTestRunsTool, createGetRecentReliabilityTestsTool, createGetReliabilityExperimentTool, createGetReliabilityReportTool, createRunReliabilityTestTool } from "./reliability-management";
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
 import { createListTeamsTool } from "./teams";
@@ -63,6 +63,15 @@ export function registerTools(server: McpServer, api: GremlinApi) {
             ],
           } as any;
         } catch (error) {
+          // structuredContent is a best-effort signal for clients that read it —
+          // the text block above (readable by any MCP client) remains the
+          // channel that actually carries the retry guidance to the model.
+          // Output-schema validation is skipped entirely for isError results
+          // (see the MCP SDK's validateToolOutput), so this needs no outputSchema.
+          const structuredContent = error instanceof GremlinApiError
+            ? { isInputError: error.isInputError, ...(error.statusCode !== undefined && { statusCode: error.statusCode }) }
+            : undefined;
+
           return {
             content: [
               {
@@ -71,6 +80,7 @@ export function registerTools(server: McpServer, api: GremlinApi) {
               },
             ],
             isError: true,
+            ...(structuredContent && { structuredContent }),
           } as any;
         }
       }
