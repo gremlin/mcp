@@ -5,6 +5,7 @@ import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, cre
 import { createListTeamsTool } from "./teams";
 import { createGetPricingReportTool, createGetClientSummaryTool, createGetAttackSummaryTool } from "./company";
 import { createSearchGremlinApiTool, createExecuteGremlinApiTool } from "./openapi";
+import { createGetContainerTool, createMatchContainersTool, createListContainerLabelKeysTool } from "./containers";
 
 interface Tool {
   name: string;
@@ -33,6 +34,10 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createGetPricingReportTool(api),
     createGetClientSummaryTool(api),
     createGetAttackSummaryTool(api),
+
+    createGetContainerTool(api),
+    createMatchContainersTool(api),
+    createListContainerLabelKeysTool(api),
 
     createSearchGremlinApiTool(api),
     createExecuteGremlinApiTool(api, server),

@@ -152,6 +152,20 @@ Gets recent reliability tests for a team.
 Retrieves the current test suite for a team or all teams.
 - **Parameters:** `teamId` (optional)
 
+### Container Targeting
+
+#### `get_container`
+Fetches a single container by its ID — a quick point lookup, not a search. Returns `id`, `clientId`, `name`, and `labels`.
+- **Parameters:** `teamId` (required), `containerId` (required)
+
+#### `match_containers`
+Previews which containers a targeting selector would match, using the same matching logic a real Service's targeting strategy uses. Returns `matchedContainers` (each with `id`, `clientId`, `name`, `labels`) plus `totalContainerCount` (the full team container count, so you can report e.g. "12 of 340 matched").
+- **Parameters:** `teamId` (required), and exactly one of `isAll` (boolean), `ids` (list of container IDs), or `multiSelectLabels` (map of label key → list of acceptable values; keys are combined with AND, values within a key with OR)
+
+#### `list_container_label_keys`
+Lists the distinct label keys observed across all of the team's containers (keys only — no values or counts). Use this to discover valid keys before building a `multiSelectLabels` selector for `match_containers`.
+- **Parameters:** `teamId` (required)
+
 ### Direct API Access
 
 #### `search_gremlin_api`

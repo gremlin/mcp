@@ -168,6 +168,31 @@ export interface PricingReport {
 
 export type ReportPeriod = 'MONTHS' | 'WEEKS' | 'DAYS';
 
+export interface ContainerSummary {
+  id: string;
+  clientId: string;
+  name: string;
+  labels: Record<string, string>;
+}
+
+export interface ContainerMatchResponse {
+  matchedContainers: ContainerSummary[];
+  totalContainerCount: number;
+}
+
+export interface LabelKeysResponse {
+  labelKeys: string[];
+}
+
+// Exactly one of isAll, ids, or multiSelectLabels must be set — enforced
+// server-side (400) and mirrored client-side in matchContainers below so
+// callers get a clear error before making the request.
+export interface ContainerSelectorRequest {
+  isAll?: boolean;
+  ids?: string[];
+  multiSelectLabels?: Record<string, string[]>;
+}
+
 export interface User { }
 
 export interface Team {
@@ -502,6 +527,40 @@ export class GremlinApi {
   async getSelf(): Promise<Self> {
     return this.jsonRequestWithRetry<Self>('users/self', {
       method: 'GET',
+    });
+  }
+
+  async getContainer(containerId: string, teamId: string): Promise<ContainerSummary> {
+    assertRequiredParams(
+      Boolean(containerId) && Boolean(teamId),
+      'Both containerId and teamId are required to fetch a container.',
+    );
+    return this.jsonRequestWithRetry<ContainerSummary>(`containers/${encodeURIComponent(containerId)}`, {
+      method: 'GET',
+      params: { teamId },
+    });
+  }
+
+  async matchContainers(teamId: string, selector: ContainerSelectorRequest): Promise<ContainerMatchResponse> {
+    assertRequiredParams(Boolean(teamId), 'teamId is required to preview a container match.');
+
+    const fieldsSet = [selector.isAll !== undefined, selector.ids !== undefined, selector.multiSelectLabels !== undefined]
+      .filter(Boolean).length;
+    assertRequiredParams(fieldsSet === 1, 'Exactly one of isAll, ids, or multiSelectLabels must be set.');
+
+    return this.jsonRequestWithRetry<ContainerMatchResponse>('containers/match', {
+      method: 'POST',
+      params: { teamId },
+      body: JSON.stringify(selector),
+      skipCache: true, // preview endpoint — always reflect current container state
+    });
+  }
+
+  async getContainerLabelKeys(teamId: string): Promise<LabelKeysResponse> {
+    assertRequiredParams(Boolean(teamId), 'teamId is required to fetch container label keys.');
+    return this.jsonRequestWithRetry<LabelKeysResponse>('containers/labels', {
+      method: 'GET',
+      params: { teamId },
     });
   }
 
