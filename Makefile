@@ -6,7 +6,7 @@ install:
 	npm install
 
 inspector:
-	npx -y @modelcontextprotocol/inspector npx -y tsx main.ts
+	npx -y @modelcontextprotocol/inspector npx -y tsx src/main.ts
 
 build: install
 	npx tsc --noEmit \

@@ -544,8 +544,11 @@ export class GremlinApi {
   async matchContainers(teamId: string, selector: ContainerSelectorRequest): Promise<ContainerMatchResponse> {
     assertRequiredParams(Boolean(teamId), 'teamId is required to preview a container match.');
 
-    const fieldsSet = [selector.isAll === true, selector.ids !== undefined, selector.multiSelectLabels !== undefined]
-      .filter(Boolean).length;
+    const fieldsSet = [
+      selector.isAll === true,
+      Array.isArray(selector.ids) && selector.ids.length > 0,
+      selector.multiSelectLabels !== undefined && Object.keys(selector.multiSelectLabels).length > 0,
+    ].filter(Boolean).length;
     assertRequiredParams(fieldsSet === 1, 'Exactly one of isAll, ids, or multiSelectLabels must be set.');
 
     return this.jsonRequestWithRetry<ContainerMatchResponse>('containers/match', {

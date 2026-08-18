@@ -72,8 +72,11 @@ export function createMatchContainersTool(api: GremlinApi) {
         `got ${JSON.stringify(args)} but expected { teamId: string, ... }`,
       );
 
-      const fieldsSet = [isAll === true, ids !== undefined, multiSelectLabels !== undefined]
-        .filter(Boolean).length;
+      const fieldsSet = [
+        isAll === true,
+        Array.isArray(ids) && ids.length > 0,
+        multiSelectLabels !== undefined && Object.keys(multiSelectLabels).length > 0,
+      ].filter(Boolean).length;
       assertRequiredParams(
         fieldsSet === 1,
         `Exactly one of isAll, ids, or multiSelectLabels must be set. got ${JSON.stringify(args)}`,
