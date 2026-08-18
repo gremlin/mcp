@@ -72,7 +72,7 @@ export function createMatchContainersTool(api: GremlinApi) {
         `got ${JSON.stringify(args)} but expected { teamId: string, ... }`,
       );
 
-      const fieldsSet = [isAll !== undefined, ids !== undefined, multiSelectLabels !== undefined]
+      const fieldsSet = [isAll === true, ids !== undefined, multiSelectLabels !== undefined]
         .filter(Boolean).length;
       assertRequiredParams(
         fieldsSet === 1,

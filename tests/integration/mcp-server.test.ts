@@ -466,6 +466,16 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('match_containers rejects isAll: false with no other selector field set', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'match_containers',
+      arguments: { teamId: teamId!, isAll: false },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
   it('match_containers rejects when more than one selector field is set', async () => {
     expect(teamId).toBeDefined();
 
