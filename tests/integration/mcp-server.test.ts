@@ -21,6 +21,14 @@ function parseToolResult(result: ToolResult): unknown {
   }
 }
 
+function monthRangeEndingToday(): { start: string; end: string } {
+  const now = new Date();
+  const end = now.toISOString().split('T')[0];
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, now.getUTCDate()))
+    .toISOString().split('T')[0];
+  return { start, end };
+}
+
 describe.skipIf(SKIP)('MCP server integration', () => {
   let client: Client;
   let transport: StdioClientTransport;
@@ -303,10 +311,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   // ── Tool calls: pricing ──────────────────────────────────────────
 
   it('get_pricing_report returns a valid report', async () => {
-    const now = new Date();
-    const endDate = now.toISOString().split('T')[0];
-    const startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start: startDate, end: endDate } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_pricing_report',
@@ -337,10 +342,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_pricing_report respects trackingPeriod param', async () => {
-    const now = new Date();
-    const endDate = now.toISOString().split('T')[0];
-    const startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start: startDate, end: endDate } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_pricing_report',
@@ -362,10 +364,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   it('get_client_summary returns a response for a real team', async () => {
     expect(teamId).toBeDefined();
 
-    const now = new Date();
-    const end = now.toISOString().split('T')[0];
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start, end } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_client_summary',
@@ -383,10 +382,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   it('get_attack_summary returns a response for a real team', async () => {
     expect(teamId).toBeDefined();
 
-    const now = new Date();
-    const end = now.toISOString().split('T')[0];
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start, end } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_attack_summary',
