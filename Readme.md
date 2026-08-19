@@ -256,6 +256,14 @@ env $(cat .env | xargs) make test
 make inspector
 ```
 
+### Version Bumps
+
+```bash
+make bump VERSION=patch   # or minor / major
+```
+
+Updates the version everywhere it's hardcoded (`package.json`, `package-lock.json`, `src/main.ts`, `src/client/gremlin.ts`). A pre-push hook blocks pushes with real changes but no version bump — for hotfixes/merge-backs where that doesn't apply, bypass it with `SKIP_VERSION_CHECK=1 git push`.
+
 ### Publishing
 
 ```bash
