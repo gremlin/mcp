@@ -21,6 +21,14 @@ function parseToolResult(result: ToolResult): unknown {
   }
 }
 
+function monthRangeEndingToday(): { start: string; end: string } {
+  const now = new Date();
+  const end = now.toISOString().split('T')[0];
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, now.getUTCDate()))
+    .toISOString().split('T')[0];
+  return { start, end };
+}
+
 describe.skipIf(SKIP)('MCP server integration', () => {
   let client: Client;
   let transport: StdioClientTransport;
@@ -28,6 +36,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   // Stash real IDs discovered during tests so downstream tools can use them
   let teamId: string | undefined;
   let serviceId: string | undefined;
+  let containerId: string | undefined;
 
   beforeAll(async () => {
     const serverPath = path.resolve(process.cwd(), 'build/main.mjs');
@@ -71,6 +80,9 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(names).toContain('get_pending_test_runs');
     expect(names).toContain('search_gremlin_api');
     expect(names).toContain('execute_gremlin_api');
+    expect(names).toContain('get_container');
+    expect(names).toContain('match_containers');
+    expect(names).toContain('list_container_label_keys');
   });
 
   it('lists resource templates', async () => {
@@ -299,10 +311,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   // ── Tool calls: pricing ──────────────────────────────────────────
 
   it('get_pricing_report returns a valid report', async () => {
-    const now = new Date();
-    const endDate = now.toISOString().split('T')[0];
-    const startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start: startDate, end: endDate } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_pricing_report',
@@ -333,10 +342,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_pricing_report respects trackingPeriod param', async () => {
-    const now = new Date();
-    const endDate = now.toISOString().split('T')[0];
-    const startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start: startDate, end: endDate } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_pricing_report',
@@ -349,9 +355,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_pricing_report rejects missing dates at the schema level', async () => {
-    await expect(
-      client.callTool({ name: 'get_pricing_report', arguments: {} })
-    ).rejects.toThrow();
+    const result = await client.callTool({ name: 'get_pricing_report', arguments: {} }) as ToolResult;
+    expect(result.isError).toBe(true);
   });
 
   // ── Tool calls: team reports ─────────────────────────────────────
@@ -359,10 +364,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   it('get_client_summary returns a response for a real team', async () => {
     expect(teamId).toBeDefined();
 
-    const now = new Date();
-    const end = now.toISOString().split('T')[0];
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start, end } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_client_summary',
@@ -373,18 +375,14 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_client_summary rejects missing params at the schema level', async () => {
-    await expect(
-      client.callTool({ name: 'get_client_summary', arguments: {} })
-    ).rejects.toThrow();
+    const result = await client.callTool({ name: 'get_client_summary', arguments: {} }) as ToolResult;
+    expect(result.isError).toBe(true);
   });
 
   it('get_attack_summary returns a response for a real team', async () => {
     expect(teamId).toBeDefined();
 
-    const now = new Date();
-    const end = now.toISOString().split('T')[0];
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-      .toISOString().split('T')[0];
+    const { start, end } = monthRangeEndingToday();
 
     const result = await client.callTool({
       name: 'get_attack_summary',
@@ -395,9 +393,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
   });
 
   it('get_attack_summary rejects missing params at the schema level', async () => {
-    await expect(
-      client.callTool({ name: 'get_attack_summary', arguments: {} })
-    ).rejects.toThrow();
+    const result = await client.callTool({ name: 'get_attack_summary', arguments: {} }) as ToolResult;
+    expect(result.isError).toBe(true);
   });
 
   // ── Error handling ─────────────────────────────────────────────────
@@ -406,6 +403,149 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     const result = await client.callTool({
       name: 'get_service_dependencies',
       arguments: { serviceId: '', teamId: '' },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  // ── Tool calls: containers ────────────────────────────────────────
+
+  it('list_container_label_keys returns an array of label keys', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'list_container_label_keys',
+      arguments: { teamId: teamId! },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const response = parseToolResult(result) as { labelKeys: string[] };
+    expect(response).toHaveProperty('labelKeys');
+    expect(Array.isArray(response.labelKeys)).toBe(true);
+  });
+
+  it('list_container_label_keys rejects a missing teamId', async () => {
+    const result = await client.callTool({ name: 'list_container_label_keys', arguments: {} }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('match_containers with isAll matches every container for the team', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'match_containers',
+      arguments: { teamId: teamId!, isAll: true },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const response = parseToolResult(result) as {
+      matchedContainers: Array<{ id: string; clientId: string; name: string; labels: Record<string, string> }>;
+      totalContainerCount: number;
+    };
+    expect(response).toHaveProperty('matchedContainers');
+    expect(response).toHaveProperty('totalContainerCount');
+    expect(Array.isArray(response.matchedContainers)).toBe(true);
+    expect(response.matchedContainers.length).toBe(response.totalContainerCount);
+
+    if (response.matchedContainers.length > 0) {
+      containerId = response.matchedContainers[0].id;
+    }
+  });
+
+  it('match_containers rejects a missing teamId', async () => {
+    const result = await client.callTool({ name: 'match_containers', arguments: { isAll: true } }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('match_containers rejects when no selector field is set', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'match_containers',
+      arguments: { teamId: teamId! },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('match_containers rejects isAll: false with no other selector field set', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'match_containers',
+      arguments: { teamId: teamId!, isAll: false },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('match_containers rejects when more than one selector field is set', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'match_containers',
+      arguments: { teamId: teamId!, isAll: true, ids: ['some-id'] },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('match_containers with multiSelectLabels', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'match_containers',
+      arguments: {
+        teamId: teamId!,
+        multiSelectLabels: { 'definitely-not-a-real-label-key': ['definitely-not-a-real-value'] },
+      },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const response = parseToolResult(result) as { matchedContainers: unknown[]; totalContainerCount: number };
+    expect(response.matchedContainers.length).toBe(0);
+  });
+
+  it('get_container returns a container for a real ID', async () => {
+    expect(teamId).toBeDefined();
+    if (!containerId) {
+      // No containers exist for this team — nothing to look up.
+      return;
+    }
+
+    const result = await client.callTool({
+      name: 'get_container',
+      arguments: { teamId: teamId!, containerId },
+    }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const container = parseToolResult(result) as { id: string; clientId: string; name: string; labels: Record<string, string> };
+    expect(container).toHaveProperty('id', containerId);
+    expect(container).toHaveProperty('clientId');
+    expect(container).toHaveProperty('name');
+    expect(container).toHaveProperty('labels');
+  });
+
+  it('get_container rejects a missing containerId', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'get_container',
+      arguments: { teamId: teamId!, containerId: '' },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('get_container rejects a missing teamId', async () => {
+    const result = await client.callTool({
+      name: 'get_container',
+      arguments: { containerId: 'definitely-not-a-real-container-id' },
+    }) as ToolResult;
+    expect(result.isError).toBe(true);
+  });
+
+  it('get_container returns isError for an unknown ID (404)', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({
+      name: 'get_container',
+      arguments: { teamId: teamId!, containerId: 'definitely-not-a-real-container-id' },
     }) as ToolResult;
     expect(result.isError).toBe(true);
   });

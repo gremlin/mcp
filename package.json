@@ -1,6 +1,6 @@
 {
   "name": "@gremlin/mcp-server",
-  "version": "2.2.1",
+  "version": "2.4.0",
   "description": "Gremlin MCP Server",
   "main": "build/main.mjs",
   "bin": "build/main.mjs",
@@ -35,11 +35,11 @@
   },
   "overrides": {
     "vite": {
-      ".": "7.3.3",
+      ".": "7.3.5",
       "esbuild": "0.28.1"
     },
     "rollup": "4.60.4",
-    "postcss": "8.5.14",
+    "postcss": "8.5.25",
     "picomatch": "4.0.4"
   }
 }

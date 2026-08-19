@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { GremlinApi } from "../client/gremlin";
+import { GremlinApi, GremlinApiError } from "../client/gremlin";
 import { createGetCurrentTestSuiteTool, createGetPendingTestRunsTool, createGetRecentReliabilityTestsTool, createGetReliabilityExperimentTool, createGetReliabilityReportTool, createRunReliabilityTestTool } from "./reliability-management";
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
 import { createListTeamsTool } from "./teams";
 import { createGetPricingReportTool, createGetClientSummaryTool, createGetAttackSummaryTool } from "./company";
 import { createSearchGremlinApiTool, createExecuteGremlinApiTool } from "./openapi";
+import { createGetContainerTool, createMatchContainersTool, createListContainerLabelKeysTool } from "./containers";
 
 interface Tool {
   name: string;
@@ -34,29 +35,30 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createGetClientSummaryTool(api),
     createGetAttackSummaryTool(api),
 
+    createGetContainerTool(api),
+    createMatchContainersTool(api),
+    createListContainerLabelKeysTool(api),
+
     createSearchGremlinApiTool(api),
     createExecuteGremlinApiTool(api, server),
   ];
 
-  // Register each tool with the server
   for (const tool of tools) {
-    // Register the tool with the server using type assertion to bypass TypeScript's strict type checking
-    server.tool(
+    server.registerTool(
       tool.name,
-      tool.description,
-      tool.schema, 
-      //tool.annotations || { example: "annotation"},
+      {
+        description: tool.description,
+        inputSchema: tool.schema as any,
+        annotations: tool.annotations as any,
+      },
       async (args: Record<string, any>, extra: any) => {
         try {
-          // Use type assertion to satisfy TypeScript's type checking
           const result = await tool.handler(args, extra);
 
-          // If the result already has the expected format, return it directly
           if (result && typeof result === 'object' && 'content' in result) {
             return result as any;
           }
 
-          // Otherwise, format the result as expected by the SDK
           return {
             content: [
               {
@@ -66,7 +68,15 @@ export function registerTools(server: McpServer, api: GremlinApi) {
             ],
           } as any;
         } catch (error) {
-          // Format errors to match the SDK's expected format
+          // structuredContent is a best-effort signal for clients that read it —
+          // the text block above (readable by any MCP client) remains the
+          // channel that actually carries the retry guidance to the model.
+          // Output-schema validation is skipped entirely for isError results
+          // (see the MCP SDK's validateToolOutput), so this needs no outputSchema.
+          const structuredContent = error instanceof GremlinApiError
+            ? { isInputError: error.isInputError, ...(error.statusCode !== undefined && { statusCode: error.statusCode }) }
+            : undefined;
+
           return {
             content: [
               {
@@ -75,6 +85,7 @@ export function registerTools(server: McpServer, api: GremlinApi) {
               },
             ],
             isError: true,
+            ...(structuredContent && { structuredContent }),
           } as any;
         }
       }

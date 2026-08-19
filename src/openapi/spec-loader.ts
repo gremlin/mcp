@@ -1,3 +1,5 @@
+import { getServiceUrl } from '../config';
+
 // Minimal OpenAPI 3.0 types — only what we actually traverse
 export interface OpenApiSpec {
   paths: Record<string, PathItem>;
@@ -14,7 +16,13 @@ export interface Operation {
   tags?: string[];
   parameters?: Parameter[];
   requestBody?: RequestBody;
+  responses?: Record<string, ApiResponse>;
   security?: Array<Record<string, string[]>>;
+}
+
+export interface ApiResponse {
+  description?: string;
+  content?: Record<string, unknown>;
 }
 
 export interface Parameter {
@@ -40,9 +48,37 @@ export interface EndpointMatch {
   tags?: string[];
   parameters?: Parameter[];
   requestBody?: RequestBody;
+  responses?: Record<string, ResponseSummary>;
 }
 
-const SPEC_URL = 'https://api.gremlin.com/v1/openapi.json';
+export interface ResponseSummary {
+  description?: string;
+  content?: Record<string, Record<string, never>>;
+}
+
+// Filters each OpenAPI response object down to status code, description, and
+// content-types, dropping everything nested under each media type (schema,
+// examples, encoding, etc). This tells execute_gremlin_api callers whether to
+// expect JSON or plain text for a given endpoint without blowing up the
+// context with schema structure and examples.
+function summarizeResponses(
+  responses: Record<string, ApiResponse> | undefined,
+): Record<string, ResponseSummary> | undefined {
+  if (!responses) return undefined;
+
+  const summary: Record<string, ResponseSummary> = {};
+  for (const [statusCode, response] of Object.entries(responses)) {
+    summary[statusCode] = {
+      ...(response.description && { description: response.description }),
+      ...(response.content && {
+        content: Object.fromEntries(Object.keys(response.content).map(contentType => [contentType, {}])),
+      }),
+    };
+  }
+  return summary;
+}
+
+const SPEC_PATH = 'openapi.json';
 const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch'] as const;
 const SPEC_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -75,7 +111,7 @@ export async function getSpec(): Promise<OpenApiSpec> {
 }
 
 async function fetchSpec(): Promise<OpenApiSpec> {
-  const res = await fetch(SPEC_URL);
+  const res = await fetch(`${getServiceUrl()}/${SPEC_PATH}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch Gremlin OpenAPI spec: HTTP ${res.status}`);
   }
@@ -172,6 +208,7 @@ export function searchSpec(
           tags: op.tags,
           parameters: op.parameters,
           requestBody: op.requestBody,
+          responses: summarizeResponses(op.responses),
         },
       });
     }

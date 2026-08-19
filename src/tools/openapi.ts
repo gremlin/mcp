@@ -1,6 +1,6 @@
 import z from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { GremlinApi } from '../client/gremlin';
+import { assertRequiredParams, GremlinApi, GremlinApiError, wrapGremlinError } from '../client/gremlin';
 import { getSpec, searchSpec, OpenApiSpec } from '../openapi/spec-loader';
 
 export function createSearchGremlinApiTool(_api: GremlinApi) {
@@ -9,10 +9,14 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
     description: [
       'Search the Gremlin OpenAPI spec to discover available API endpoints.',
       'Returns matching endpoints with their method, path, parameters, and request body schema.',
+      'Each result also includes a `responses` summary (status code → response content-types,',
+      'e.g. {"202": {"content": {"text/plain": {}}}}) so you know in advance whether',
+      'execute_gremlin_api will return JSON or plain text for that endpoint.',
       'Use this before execute_gremlin_api to find the correct path and parameter names.',
       'Paths use OpenAPI template syntax (e.g. /reliability-tests/{reliabilityTestId}/runs) —',
       'pass them directly to execute_gremlin_api.',
     ].join(' '),
+    annotations: { readOnlyHint: true },
     schema: {
       query: z.string().describe(
         'Text to search for in endpoint paths, summaries, operationIds, tags, and descriptions.',
@@ -41,17 +45,13 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
     }) => {
       const { query, method, tag, limit = 10 } = args;
 
-      if (!query?.trim()) {
-        throw new Error('query must be a non-empty string');
-      }
+      assertRequiredParams(Boolean(query?.trim()), 'query must be a non-empty string');
 
       let spec;
       try {
         spec = await getSpec();
       } catch (err) {
-        throw new Error(
-          `Failed to load Gremlin OpenAPI spec: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        throw wrapGremlinError('Failed to load Gremlin OpenAPI spec', err);
       }
 
       const results = searchSpec(spec, query, method, tag, limit);
@@ -95,6 +95,11 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
       'Use search_gremlin_api first to discover the correct path, method, and parameter names.',
       'The path should use OpenAPI template syntax for path parameters',
       '(e.g. /reliability-tests/{reliabilityTestId}/runs) — they are substituted automatically.',
+      'On success (2xx), returns { status, contentType, isJsonBody, body }.',
+      '`body` is the parsed JSON when isJsonBody is true; otherwise it is the raw response text',
+      '(e.g. a bare-text ID). isJsonBody: false on a 2xx response is a normal, successful result — not an error,',
+      'even when the response is labeled JSON but fails to parse; the raw text is returned instead.',
+      'Only a 4xx/5xx response or a network-level failure calling the API is reported as a tool error, not in this envelope.',
       'WARNING: This tool can trigger real chaos experiments. Verify the endpoint and parameters carefully.',
     ].join(' '),
     schema: {
@@ -130,7 +135,8 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
         ),
     },
     annotations: {
-      destructiveHint: true,
+      readOnlyHint: false,
+      destructiveHint: false,
       idempotentHint: false,
       openWorldHint: true,
     },
@@ -185,23 +191,28 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          throw new Error(
+          // Fixable by the caller: pass confirmExecution: true instead of relying on elicitation.
+          throw new GremlinApiError(
             `Cannot confirm execution of ${method} ${specPath}: the MCP client does not support ` +
             `interactive prompts (elicitation). This endpoint requires the ` +
             `${runPrivileges.join(', ')} privilege(s). Pass confirmExecution: true to bypass ` +
             `the prompt and proceed directly. (${msg})`,
+            { isInputError: true },
           );
         }
 
         if (result.action !== 'accept' || !result.content?.['confirmed']) {
-          throw new Error(
+          // A deliberate decline, not a bad argument — retrying with different
+          // arguments won't change the human's decision.
+          throw new GremlinApiError(
             `Execution cancelled (action: ${result.action}). The request was not sent to Gremlin.`,
+            { isInputError: false },
           );
         }
       }
 
-      // Strip leading slash — GremlinApi base URL is https://api.gremlin.com/v1
-      // and requestWithRetry constructs `${baseUrl}/${path}`, so no leading slash wanted.
+      // Strip leading slash — GremlinApi base URL already includes the version
+      // prefix and buildUrl constructs `${baseUrl}/${path}`, so no leading slash wanted.
       let resolvedPath = specPath.slice(1);
 
       if (pathParams) {
@@ -215,19 +226,16 @@ export function createExecuteGremlinApiTool(api: GremlinApi, mcpServer: McpServe
 
       // Catch the common mistake of forgetting pathParams
       const unresolved = resolvedPath.match(/\{[^}]+\}/g);
-      if (unresolved) {
-        throw new Error(
-          `Path still contains unresolved template variables: ${unresolved.join(', ')}. ` +
-            `Provide values for these in pathParams.`,
-        );
-      }
+      assertRequiredParams(
+        !unresolved,
+        `Path still contains unresolved template variables: ${unresolved?.join(', ')}. ` +
+          `Provide values for these in pathParams.`,
+      );
 
       try {
         return await api.execute(method, resolvedPath, queryParams, body);
       } catch (err) {
-        throw new Error(
-          `Gremlin API call failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        throw wrapGremlinError('Gremlin API call failed', err);
       }
     },
   };

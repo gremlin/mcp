@@ -11,12 +11,21 @@ This MCP server provides access to Gremlin's reliability testing and management 
 - Reliability reporting
 - Usage and pricing reports
 - Client (agent) and attack summaries
+- Reliability test execution and queued run inspection
+- Direct access to the Gremlin API
 
 ## Installation
 
 ### Prerequisites
 - Node.js 18 or higher
 - A valid [Gremlin API key](https://app.gremlin.com/settings/api-keys)
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `GREMLIN_API_KEY` | Yes | — | Your Gremlin API key. The server exits immediately if this is missing. |
+| `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
 
 ### Claude Desktop
 
@@ -79,6 +88,11 @@ Add the following to your MCP settings:
 
 ## Available Tools
 
+### Teams
+
+#### `list_teams`
+Lists all teams you have access to. Nearly every other tool requires a `teamId`, and this is how to find one.
+
 ### Service Management
 
 #### `list_services`
@@ -104,7 +118,7 @@ Generates a reliability report for a service on a specific date.
 
 #### `get_reliability_experiments`
 Retrieves recent reliability experiments for a service.
-- **Parameters:** `teamId` (required), `serviceId` (required), `dependencyId` (optional), `testId` (optional), `limit` (optional, default: 100)
+- **Parameters:** `teamId` (required), `serviceId` (required), `dependencyId` (optional), `testId` (optional), `limit` (optional, default: 100), `includeScenarioRun` (optional, default: false, full step-by-step scenario run graph data)
 
 ### Usage & Billing
 
@@ -122,6 +136,14 @@ Loads the attack summary for a team over a specified time period. Shows attack a
 
 ### Testing & Experiments
 
+#### `run_reliability_test`
+Triggers a reliability test run for a service. Requires the `SERVICES_RUN` privilege. Returns HTTP 400 if a test is already running or scheduled for the service.
+- **Parameters:** `teamId` (required), `serviceId` (required), `reliabilityTestId` (required), `dependencyId` (optional), `failureFlagName` (optional), `includeScenarioRun` (optional, default: false)
+
+#### `get_pending_test_runs`
+Retrieves pending or queued test runs for a service, ordered by expected trigger time. Useful for diagnosing a 400 from `run_reliability_test`.
+- **Parameters:** `teamId` (required), `serviceId` (required)
+
 #### `get_recent_reliability_tests`
 Gets recent reliability tests for a team.
 - **Parameters:** `teamId` (required), `pageSize` (optional, default: 5), `pageToken` (optional)
@@ -130,11 +152,37 @@ Gets recent reliability tests for a team.
 Retrieves the current test suite for a team or all teams.
 - **Parameters:** `teamId` (optional)
 
+### Container Targeting
+
+#### `get_container`
+Fetches a single container by its ID — a quick point lookup, not a search. Returns `id`, `clientId`, `name`, and `labels`.
+- **Parameters:** `teamId` (required), `containerId` (required)
+
+#### `match_containers`
+Previews which containers a targeting selector would match, using the same matching logic a real Service's targeting strategy uses. Returns `matchedContainers` (each with `id`, `clientId`, `name`, `labels`) plus `totalContainerCount` (the full team container count, so you can report e.g. "12 of 340 matched").
+- **Parameters:** `teamId` (required), and exactly one of `isAll` (boolean), `ids` (list of container IDs), or `multiSelectLabels` (map of label key → list of acceptable values; keys are combined with AND, values within a key with OR)
+
+#### `list_container_label_keys`
+Lists the distinct label keys observed across all of the team's containers (keys only — no values or counts). Use this to discover valid keys before building a `multiSelectLabels` selector for `match_containers`.
+- **Parameters:** `teamId` (required)
+
+### Direct API Access
+
+#### `search_gremlin_api`
+Searches the Gremlin OpenAPI spec for endpoints, returning method, path, parameters, and request body schema for each match.
+- **Parameters:** `query` (required), `method` (optional, enum: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`), `tag` (optional, partial/case-insensitive match), `limit` (optional, default: 10, max: 50)
+
+#### `execute_gremlin_api`
+Executes an arbitrary Gremlin API endpoint. Endpoints requiring a `*_RUN` privilege prompt for interactive confirmation unless bypassed; can trigger real chaos experiments.
+- **Parameters:** `method` (required, enum: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`), `path` (required, OpenAPI template syntax, leading slash optional), `pathParams` (optional), `queryParams` (optional), `body` (optional), `confirmExecution` (optional, bypasses the confirmation prompt)
+
 ## Usage Notes
 
 - All date parameters should use YYYY-MM-DD format
 - Team and service IDs are required for most service-specific operations
 - Optional parameters have sensible defaults where applicable
+- Team IDs can be discovered with `list_teams`
+- Operations that trigger tests require the corresponding `*_RUN` privilege
 
 ## Example Queries
 
