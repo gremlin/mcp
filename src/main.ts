@@ -13,7 +13,7 @@ if (!process.env.GREMLIN_API_KEY) {
 
 const server = new McpServer({
   name: "Gremlin Inc Server",
-  version: "1.1.0"
+  version: "2.4.1"
 });
 
 const gremlinApi = new GremlinApi();

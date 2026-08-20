@@ -1,12 +1,15 @@
 
-
 .DEFAULT_GOAL := build
 
-install:
+install: hooks
 	npm install
 
+hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-commit .githooks/pre-push
+
 inspector:
-	npx -y @modelcontextprotocol/inspector npx -y tsx main.ts
+	npx -y @modelcontextprotocol/inspector npx -y tsx src/main.ts
 
 build: install
 	npx tsc --noEmit \
@@ -19,3 +22,5 @@ test: build
 publish: test
 	npm publish
 
+bump:
+	@node scripts/bump-version.mjs $(VERSION)
