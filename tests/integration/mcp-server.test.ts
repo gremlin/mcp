@@ -233,44 +233,69 @@ describe.skipIf(SKIP)('MCP server integration', () => {
       }>;
     };
 
-    // Skip any policy already queued (running/scheduled) — triggering one of
-    // those returns a real HTTP 400 from the API, independent of test logic.
-    const pendingResult = await client.callTool({
-      name: 'get_pending_test_runs',
+    const depsResult = await client.callTool({
+      name: 'get_service_dependencies',
       arguments: { teamId: teamId!, serviceId: serviceId! },
     }) as ToolResult;
-    expect(pendingResult.isError).toBeFalsy();
-    const pending = parseToolResult(pendingResult) as Array<{
-      reliabilityTestId: string;
-      dependencyId?: string | null;
-      failureFlagName?: string | null;
-    }>;
-    const pendingKeys = new Set(
-      pending.map(p => `${p.reliabilityTestId}|${p.dependencyId ?? ''}|${p.failureFlagName ?? ''}`)
+    expect(depsResult.isError).toBeFalsy();
+    const deps = parseToolResult(depsResult) as { items?: Array<{ guid: string; isSpof?: boolean }> };
+    const spofDependencyIds = new Set(
+      (deps.items ?? []).filter(d => d.isSpof).map(d => d.guid)
     );
 
-    // Find the first policy with a reliabilityTestId that isn't already queued
+    const activeRunResult = await client.callTool({
+      name: 'execute_gremlin_api',
+      arguments: {
+        method: 'GET',
+        path: '/reliability-tests/runs',
+        queryParams: { teamId: teamId!, serviceId: serviceId!, pageSize: '1' },
+      },
+    }) as ToolResult;
+    expect(activeRunResult.isError).toBeFalsy();
+    const activeRunBody = parseToolResult(activeRunResult) as {
+      body?: {
+        items?: Array<{
+          guid: string;
+          dependencyId?: string;
+          failureFlagName?: string;
+          run?: { end_time?: string; created_at?: string };
+        }>;
+      };
+    };
+    const mostRecentRun = activeRunBody.body?.items?.[0];
+    const activeRun = mostRecentRun && !mostRecentRun.run?.end_time ? mostRecentRun : undefined;
+
     let reliabilityTestId: string | undefined;
     let testDependencyId: string | undefined;
     let testFailureFlagName: string | undefined;
+    let skippedSpofCount = 0;
 
-    for (const category of Object.values(report.reliability)) {
-      for (const policy of category.policyStates) {
-        if (!policy.reliabilityTestId) continue;
-        const key = `${policy.reliabilityTestId}|${policy.dependencyId ?? ''}|${policy.failureFlagName ?? ''}`;
-        if (pendingKeys.has(key)) continue;
-        reliabilityTestId = policy.reliabilityTestId;
-        testDependencyId = policy.dependencyId;
-        testFailureFlagName = policy.failureFlagName;
-        break;
+    if (!activeRun) {
+      for (const category of Object.values(report.reliability)) {
+        for (const policy of category.policyStates) {
+          if (!policy.reliabilityTestId) continue;
+          if (policy.dependencyId && spofDependencyIds.has(policy.dependencyId)) {
+            skippedSpofCount++;
+            continue;
+          }
+          reliabilityTestId = policy.reliabilityTestId;
+          testDependencyId = policy.dependencyId;
+          testFailureFlagName = policy.failureFlagName;
+          break;
+        }
+        if (reliabilityTestId) break;
       }
-      if (reliabilityTestId) break;
     }
 
     expect(
       reliabilityTestId,
-      `No runnable reliability test found for service ${serviceId} — every discovered policy is already ` +
-      `running or scheduled (${pending.length} pending run(s): ${pending.map(p => p.reliabilityTestId).join(', ') || 'none'}).`,
+      activeRun
+        ? `Cannot run — service ${serviceId} already has a reliability test in progress: ` +
+          `${activeRun.guid} (dependencyId=${activeRun.dependencyId ?? 'n/a'}, ` +
+          `failureFlagName=${activeRun.failureFlagName ?? 'n/a'}), started at ` +
+          `${activeRun.run?.created_at ?? 'unknown time'}. Wait for it to finish before retrying.`
+        : `No runnable reliability test found for service ${serviceId} — every discovered policy ` +
+          `targets a SPOF dependency (${skippedSpofCount} excluded).`,
     ).toBeDefined();
 
     const runArgs: Record<string, string> = {
