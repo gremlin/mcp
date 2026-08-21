@@ -233,24 +233,45 @@ describe.skipIf(SKIP)('MCP server integration', () => {
       }>;
     };
 
-    // Find the first policy with a reliabilityTestId
+    // Skip any policy already queued (running/scheduled) — triggering one of
+    // those returns a real HTTP 400 from the API, independent of test logic.
+    const pendingResult = await client.callTool({
+      name: 'get_pending_test_runs',
+      arguments: { teamId: teamId!, serviceId: serviceId! },
+    }) as ToolResult;
+    expect(pendingResult.isError).toBeFalsy();
+    const pending = parseToolResult(pendingResult) as Array<{
+      reliabilityTestId: string;
+      dependencyId?: string | null;
+      failureFlagName?: string | null;
+    }>;
+    const pendingKeys = new Set(
+      pending.map(p => `${p.reliabilityTestId}|${p.dependencyId ?? ''}|${p.failureFlagName ?? ''}`)
+    );
+
+    // Find the first policy with a reliabilityTestId that isn't already queued
     let reliabilityTestId: string | undefined;
     let testDependencyId: string | undefined;
     let testFailureFlagName: string | undefined;
 
     for (const category of Object.values(report.reliability)) {
       for (const policy of category.policyStates) {
-        if (policy.reliabilityTestId) {
-          reliabilityTestId = policy.reliabilityTestId;
-          testDependencyId = policy.dependencyId;
-          testFailureFlagName = policy.failureFlagName;
-          break;
-        }
+        if (!policy.reliabilityTestId) continue;
+        const key = `${policy.reliabilityTestId}|${policy.dependencyId ?? ''}|${policy.failureFlagName ?? ''}`;
+        if (pendingKeys.has(key)) continue;
+        reliabilityTestId = policy.reliabilityTestId;
+        testDependencyId = policy.dependencyId;
+        testFailureFlagName = policy.failureFlagName;
+        break;
       }
       if (reliabilityTestId) break;
     }
 
-    expect(reliabilityTestId).toBeDefined();
+    expect(
+      reliabilityTestId,
+      `No runnable reliability test found for service ${serviceId} — every discovered policy is already ` +
+      `running or scheduled (${pending.length} pending run(s): ${pending.map(p => p.reliabilityTestId).join(', ') || 'none'}).`,
+    ).toBeDefined();
 
     const runArgs: Record<string, string> = {
       teamId: teamId!,
@@ -264,7 +285,14 @@ describe.skipIf(SKIP)('MCP server integration', () => {
       name: 'run_reliability_test',
       arguments: runArgs,
     }) as ToolResult;
-    expect(result.isError).toBeFalsy();
+
+    const errorText = result.isError
+      ? result.content.find(c => c.type === 'text')?.text
+      : undefined;
+    expect(
+      result.isError,
+      `run_reliability_test failed for reliabilityTestId=${reliabilityTestId}, dependencyId=${testDependencyId ?? '(none)'}: ${errorText}`,
+    ).toBeFalsy();
 
     const run = parseToolResult(result) as {
       guid: string;

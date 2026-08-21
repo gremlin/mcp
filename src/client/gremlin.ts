@@ -309,7 +309,7 @@ function buildHttpError(status: number, body: string): GremlinApiError {
 
 export class GremlinApi {
   private baseUrl: string = getServiceUrl();
-  private userAgent = "@gremlin/gremlin-mcp/2.4.1";
+  private userAgent = "@gremlin/gremlin-mcp/2.4.2";
   private cache = new TTLCache<string, unknown>();
 
   async listUsers(): Promise<User[]> {
