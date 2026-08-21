@@ -36,10 +36,16 @@ try {
 }
 
 const changedFiles = sh(`git diff --name-only ${base} HEAD`).split("\n").filter(Boolean);
-// Docs-only changes don't need a version bump; everything else does
-// (including the version-carrying files themselves, since they're normal
-// source/config files that can change for reasons unrelated to bumping).
-const meaningfulChanges = changedFiles.filter((f) => !/\.md$/i.test(f));
+// Docs, tests, and dev tooling scripts don't need a version bump; everything
+// else does (including the version-carrying files themselves, since they're
+// normal source/config files that can change for reasons unrelated to
+// bumping). git diff --name-only
+// always uses forward slashes, even on Windows, so these prefix checks are
+// safe cross-platform.
+const EXEMPT_PREFIXES = ["tests/", "scripts/"];
+const meaningfulChanges = changedFiles.filter(
+  (f) => !/\.md$/i.test(f) && !EXEMPT_PREFIXES.some((p) => f.startsWith(p))
+);
 
 if (meaningfulChanges.length === 0) process.exit(0);
 
