@@ -20,12 +20,45 @@ This MCP server provides access to Gremlin's reliability testing and management 
 - Node.js 18 or higher
 - A valid [Gremlin API key](https://app.gremlin.com/settings/api-keys)
 
+### Two deployments
+
+There are two entrypoints, with different authentication models, and they are deliberately separate
+programs rather than two modes of one:
+
+| | `src/main.ts` (`build/main.mjs`) | `src/http.ts` (`build/http.mjs`) |
+| --- | --- | --- |
+| Transport | stdio | Streamable HTTP |
+| Runs | Locally, next to your client | Hosted, Gremlin-operated |
+| Users | One | Many, concurrently |
+| Credential | A static API key from the environment | Each user's own OAuth 2.0 access token |
+
+This is the deployment customers run themselves, and the one Private Edition uses. It is
+unaffected by the hosted server: the hosted path never falls back to a process-wide credential,
+because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` exists.
+
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `GREMLIN_API_KEY` | Yes | — | Your Gremlin API key. The server exits immediately if this is missing. |
+| `GREMLIN_API_KEY` | stdio only | — | Your Gremlin API key. The server exits immediately if this is missing. Not read by the hosted server. |
 | `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
+| `GREMLIN_MCP_RESOURCE_URL` | HTTP only | — | This server's own public origin, e.g. `https://mcp.gremlin.com`. Its RFC 8707 resource identifier, compared as an exact string, so it must match the `resource` a client sends and what the authorization server audiences tokens for. No default: a wrong guess surfaces as an authentication failure with no obvious cause, so the server refuses to start without it. |
+| `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
+| `PORT` | No | `8080` | HTTP listen port. |
+
+### Hosted server endpoints
+
+| Path | Auth | Purpose |
+| --- | --- | --- |
+| `/.well-known/oauth-protected-resource` | None | RFC 9728 metadata. Public by definition — it is how a client discovers where to authenticate, so requiring a token to read it would be circular. |
+| `/mcp` | `Authorization: Bearer <access token>` | The MCP endpoint. A request with no token gets `401` plus a `WWW-Authenticate` header naming the metadata document; that exchange is the entry point to the whole OAuth flow. |
+| `/healthz` | None | Liveness, plus the live session count. |
+
+Each authenticated session gets its own `McpServer` and its own `GremlinApi`. That is a
+requirement, not an optimisation: the API client's response cache is keyed on URL alone, so a
+shared instance would answer one user's request with another user's teams, services and reports
+for the full cache TTL, and every response would look valid. Sessions are additionally bound to the
+credential that opened them, so a leaked session id is useless without the token behind it.
 
 ### Claude Desktop
 

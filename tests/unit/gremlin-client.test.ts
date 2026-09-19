@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GremlinApi, GremlinApiError, isJsonContentTypeHeader } from '../../src/client/gremlin';
+import type { GremlinCredential } from '../../src/auth/credential';
+
+const TEST_CREDENTIAL: GremlinCredential = { kind: 'apiKey', value: 'test-key' };
 
 function mockResponse(status: number, body: string, headers: Record<string, string> = {}) {
   return {
@@ -36,7 +39,7 @@ describe('GremlinApi#execute (execute_gremlin_api)', () => {
   let api: GremlinApi;
 
   beforeEach(() => {
-    api = new GremlinApi();
+    api = new GremlinApi(TEST_CREDENTIAL);
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -158,7 +161,7 @@ describe('GremlinApi typed methods (JSON-only endpoints)', () => {
   let api: GremlinApi;
 
   beforeEach(() => {
-    api = new GremlinApi();
+    api = new GremlinApi(TEST_CREDENTIAL);
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -246,7 +249,7 @@ describe('GremlinApiError classification', () => {
   let api: GremlinApi;
 
   beforeEach(() => {
-    api = new GremlinApi();
+    api = new GremlinApi(TEST_CREDENTIAL);
     vi.stubGlobal('fetch', vi.fn());
   });
 

@@ -14,7 +14,8 @@ inspector:
 build: install
 	npx tsc --noEmit \
 		&& npx esbuild src/main.ts --bundle --platform=node --format=esm --banner:js='#!/usr/bin/env node' --outfile=build/main.mjs \
-		&& chmod +x build/main.mjs
+		&& npx esbuild src/http.ts --bundle --platform=node --format=esm --banner:js='#!/usr/bin/env node' --outfile=build/http.mjs \
+		&& chmod +x build/main.mjs build/http.mjs
 
 test: build
 	npx vitest run
