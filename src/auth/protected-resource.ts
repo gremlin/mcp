@@ -22,6 +22,17 @@ export const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
  * between the identifier's host and its path, so an identifier with a path would have to be served
  * at `/.well-known/oauth-protected-resource/<path>`. Keeping it at the root is the shape everything
  * is best tested against.
+ *
+ * <p>The convention is `https://<host>.gremlin.com`, and for the hosted server that is
+ * `https://mcp.gremlin.com`: the MCP authorization spec makes the canonical resource identifier the
+ * MCP server's own URL, which is what Claude reads from this document and sends to the
+ * authorization server as `resource`. It must match the authorization server's allow list
+ * (`GREMLIN_OAUTH_RESOURCES`) byte for byte -- there is no normalisation on either side beyond the
+ * trailing slash stripped here.
+ *
+ * <p>No default, deliberately: an identifier that disagrees with what the authorization server
+ * audiences tokens for surfaces as an authentication failure with no obvious cause, and a wrong
+ * default would be harder to notice than a missing one.
  */
 export function getResourceIdentifier(): string {
   const configured = process.env.GREMLIN_MCP_RESOURCE_URL?.trim();

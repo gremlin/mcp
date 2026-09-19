@@ -42,7 +42,7 @@ because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` 
 | --- | --- | --- | --- |
 | `GREMLIN_API_KEY` | stdio only | — | Your Gremlin API key. The server exits immediately if this is missing. Not read by the hosted server. |
 | `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
-| `GREMLIN_MCP_RESOURCE_URL` | HTTP only | — | This server's own public origin, e.g. `https://mcp.gremlin.com`. Its RFC 8707 resource identifier, compared as an exact string, so it must match the `resource` a client sends and what the authorization server audiences tokens for. No default: a wrong guess surfaces as an authentication failure with no obvious cause, so the server refuses to start without it. |
+| `GREMLIN_MCP_RESOURCE_URL` | HTTP only | — | This server's own public origin — `https://mcp.gremlin.com` in production, host-only with no path. Its RFC 8707 resource identifier, compared as an exact string, so it must match the `resource` a client sends and what the authorization server audiences tokens for. No default: a wrong guess surfaces as an authentication failure with no obvious cause, so the server refuses to start without it. |
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
 | `PORT` | No | `8080` | HTTP listen port. |
 
