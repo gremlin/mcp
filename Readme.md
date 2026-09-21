@@ -45,6 +45,8 @@ because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` 
 | `GREMLIN_MCP_RESOURCE_URL` | HTTP only | — | This server's own public origin — `https://mcp.gremlin.com` in production, host-only with no path. Its RFC 8707 resource identifier, compared as an exact string, so it must match the `resource` a client sends and what the authorization server audiences tokens for. No default: a wrong guess surfaces as an authentication failure with no obvious cause, so the server refuses to start without it. |
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
 | `PORT` | No | `8080` | HTTP listen port. |
+| `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
+| `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. |
 
 ### Hosted server endpoints
 
@@ -57,8 +59,18 @@ because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` 
 Each authenticated session gets its own `McpServer` and its own `GremlinApi`. That is a
 requirement, not an optimisation: the API client's response cache is keyed on URL alone, so a
 shared instance would answer one user's request with another user's teams, services and reports
-for the full cache TTL, and every response would look valid. Sessions are additionally bound to the
-credential that opened them, so a leaked session id is useless without the token behind it.
+for the full cache TTL, and every response would look valid.
+
+Sessions are additionally bound to the SHA-256 fingerprint of the credential that opened them, so
+attaching to a session requires presenting that same token — a leaked session id alone will not do.
+
+Two bounds sit in front of session creation, because a session is allocated on the first request
+rather than on demand: `GREMLIN_MCP_MAX_SESSIONS` (default 2000) caps how many can exist, and
+`GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` (default 20) caps how fast one source can open them.
+Reusing an established session is not counted against the second. A bearer that is not one of our
+`gremlin_oat_` access tokens is refused before anything is allocated — notably including an
+internal Gremlin session token, which the API would otherwise accept under the same Bearer
+scheme.
 
 ### Claude Desktop
 

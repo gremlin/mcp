@@ -31,6 +31,28 @@ describe('credentialFingerprint', () => {
     );
   });
 
+  it('is a full-width cryptographic digest, not a bucketing hash', () => {
+    // This value is the sole authorization check for attaching to an existing MCP session, so its
+    // width is a security parameter. It was a 32-bit polynomial hash: with a known session id, a
+    // colliding token was a 1-in-2^32 guess against a server with no rate limiting, and a
+    // collision handed over a session holding the original user's token.
+    const fingerprint = credentialFingerprint(oauthCredential('gremlin_oat_abc'));
+
+    expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('separates credentials that differ only in their last character', () => {
+    // A weak polynomial hash over short, highly-similar tokens is exactly where collisions show
+    // up first, so this is the shape worth pinning.
+    const seen = new Set(
+      Array.from({ length: 256 }, (_, i) =>
+        credentialFingerprint(oauthCredential(`gremlin_oat_token_${i}`)),
+      ),
+    );
+
+    expect(seen.size).toBe(256);
+  });
+
   it('does not contain the credential it describes', () => {
     // It is used as a Map key and appears in logs, so leaking the token through it would undo the
     // reason for hashing at all.

@@ -171,6 +171,53 @@ describe('MCP HTTP app', () => {
     });
   });
 
+  describe('resource exhaustion bounds', () => {
+    it('refuses a session-bearing credential shape it does not issue', async () => {
+      // Rejected before any session, server or API client is allocated, which is what stops an
+      // attacker spending memory with arbitrary bearer values.
+      harness = await startApp();
+
+      const response = await mcpRequest(harness.origin, { token: 'not-a-gremlin-token' });
+
+      expect(response.status).toBe(401);
+      expect(harness.app.sessionCount()).toBe(0);
+    });
+
+    it('caps new sessions per source and says to retry', async () => {
+      // Session setup is the expensive path and happens before the API has validated anything, so
+      // the only identity available is the caller's address.
+      harness = await startApp();
+      const statuses: number[] = [];
+
+      for (let i = 0; i < 25; i++) {
+        const response = await mcpRequest(harness.origin, { token: `gremlin_oat_flood_${i}` });
+        statuses.push(response.status);
+      }
+
+      expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+      const limited = statuses.indexOf(429);
+      // Everything after the first refusal stays refused within the window.
+      expect(statuses.slice(limited).every((s) => s === 429)).toBe(true);
+    });
+
+    it('does not count requests that reuse an established session', async () => {
+      // A legitimate client makes many calls against one session and must never be throttled for
+      // it; only creation is bounded.
+      harness = await startApp();
+      const initialized = await mcpRequest(harness.origin, { token: TOKEN_A });
+      const sessionId = initialized.headers.get('mcp-session-id')!;
+
+      for (let i = 0; i < 40; i++) {
+        const response = await mcpRequest(harness.origin, {
+          token: TOKEN_A,
+          sessionId,
+          body: { jsonrpc: '2.0', id: i + 2, method: 'tools/list', params: {} },
+        });
+        expect(response.status).toBe(200);
+      }
+    });
+  });
+
   describe('session lifecycle', () => {
     it('reports an unknown session rather than failing opaquely', async () => {
       harness = await startApp();

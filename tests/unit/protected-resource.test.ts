@@ -109,6 +109,22 @@ describe('bearerTokenFrom', () => {
     expect(bearerTokenFrom('bearer gremlin_oat_abc')).toBe('gremlin_oat_abc');
   });
 
+  it('rejects a bearer that is not one of our OAuth access tokens', () => {
+    // The Gremlin API also accepts an internal webapp session token under the Bearer scheme, as
+    // base64(orgId:identifier:token). Without this check the hosted server would relay a stolen
+    // browser session upstream and it would authenticate -- a public endpoint turned into a relay
+    // for a credential class that was never meant to reach it.
+    const sessionToken = Buffer.from('org-1:user-1:secret').toString('base64');
+
+    expect(bearerTokenFrom(`Bearer ${sessionToken}`)).toBeNull();
+    expect(bearerTokenFrom('Bearer gremlin_ort_a_refresh_token')).toBeNull();
+    expect(bearerTokenFrom('Bearer arbitrary-opaque-value')).toBeNull();
+  });
+
+  it('accepts a Gremlin OAuth access token', () => {
+    expect(bearerTokenFrom('Bearer gremlin_oat_abc')).toBe('gremlin_oat_abc');
+  });
+
   it('rejects the Key scheme the local server uses', () => {
     // The hosted server authenticates exactly one way. Quietly accepting a static API key here
     // would add an unintended auth path that bypasses OAuth entirely.

@@ -9,6 +9,8 @@ export type GremlinCredential =
   | { readonly kind: 'apiKey'; readonly value: string }
   | { readonly kind: 'oauth'; readonly value: string };
 
+import { createHash } from 'node:crypto';
+
 /**
  * An opaque, stable handle on whose credential this is.
  *
@@ -21,14 +23,18 @@ export type GremlinCredential =
  * signal available here.
  */
 export function credentialFingerprint(credential: GremlinCredential): string {
-  // Non-cryptographic and never persisted: this only has to separate concurrent sessions within
-  // one process, and every consumer treats it as an opaque key.
-  let hash = 0;
-  const material = `${credential.kind}:${credential.value}`;
-  for (let i = 0; i < material.length; i++) {
-    hash = (Math.imul(31, hash) + material.charCodeAt(i)) | 0;
-  }
-  return `${credential.kind}-${(hash >>> 0).toString(36)}`;
+  // SHA-256, because this is an authorization check and not a bucketing key.
+  //
+  // It was previously a 31x + charCode polynomial masked to 32 bits. That is fine for separating
+  // concurrent sessions, which is what the comment here used to claim it was for -- but it is also
+  // what `app.ts` compares to decide whether a caller may attach to an existing session. At 32
+  // bits, anyone holding a session id needed only a credential whose fingerprint collided, a
+  // 1-in-2^32 guess with no rate limit in front of it, and a collision grants the session's own
+  // server, which holds the original user's token. Comparing a 32-bit value in constant time
+  // guards the wrong property entirely.
+  return createHash('sha256')
+    .update(`${credential.kind}:${credential.value}`)
+    .digest('hex');
 }
 
 /** The `Authorization` header value this credential presents. */

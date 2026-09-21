@@ -105,8 +105,32 @@ export function bearerTokenFrom(authorization: string | undefined): string | nul
   const match = /^Bearer[ ]+(.+)$/i.exec(authorization.trim());
   if (!match) return null;
   const token = match[1].trim();
-  return token.length > 0 ? token : null;
+  if (token.length === 0) return null;
+
+  // Must be one of our OAuth access tokens, not merely a well-formed bearer.
+  //
+  // This is not defence in depth against a forged token -- only the API can validate one, and it
+  // will. It is about what this server is willing to relay. The Gremlin API also accepts an
+  // internal webapp session token under the same Bearer scheme, as
+  // `base64(orgId:identifier:token)`, so without this check a hosted MCP server would happily
+  // forward a stolen browser session upstream and it would authenticate: a public endpoint turned
+  // into a relay for a credential class that was never meant to reach it. Rejecting here also
+  // means an unparseable credential is refused before it can cost us a session.
+  return isAccessToken(token) ? token : null;
 }
+
+/**
+ * Recognises the prefix the authorization server puts on its access tokens.
+ *
+ * <p>Kept in step with `OAuthTokens.ACCESS_TOKEN_PREFIX` on the service side; changing it there
+ * invalidates every issued credential, so it is stable by construction.
+ */
+export function isAccessToken(token: string): boolean {
+  return token.startsWith(ACCESS_TOKEN_PREFIX);
+}
+
+/** Mirrors `com.gremlininc.oauth.OAuthTokens.ACCESS_TOKEN_PREFIX`. */
+export const ACCESS_TOKEN_PREFIX = 'gremlin_oat_';
 
 function stripTrailingSlash(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;

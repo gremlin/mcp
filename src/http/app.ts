@@ -42,6 +42,54 @@ interface Session {
  */
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
+/**
+ * Hard ceiling on concurrent sessions.
+ *
+ * <p>Each session holds an McpServer, a GremlinApi and that client's own response cache, and is
+ * built on the first request rather than on demand -- so without a ceiling, N requests bearing N
+ * distinct tokens allocate N of them and nothing is released until the idle reaper runs half an
+ * hour later. Refusing at the limit degrades for new connections; not refusing degrades for
+ * everyone.
+ */
+const MAX_SESSIONS = Number(process.env.GREMLIN_MCP_MAX_SESSIONS ?? 2000);
+
+/**
+ * Per-source cap on session creation.
+ *
+ * <p>Session setup is the expensive path here, and it happens before the API has validated
+ * anything, so the only identity available is the caller's address. Reusing an established session
+ * is deliberately not counted: a legitimate client makes many requests against one session and
+ * should never be throttled for it.
+ */
+const MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE = Number(
+  process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE ?? 20,
+);
+
+const RATE_WINDOW_MS = 60 * 1000;
+
+/**
+ * The caller's address, preferring the rightmost forwarded hop.
+ *
+ * <p>Rightmost because a caller controls what it prepends to `X-Forwarded-For` and not what the
+ * proxy in front of us appends; reading the leftmost entry would let one attacker present a fresh
+ * identity per request and never reach a limit. Falls back to the socket address, then to a single
+ * shared bucket, so unattributable traffic is bounded rather than exempt.
+ */
+function sourceKey(req: IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  const chain = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
+  if (chain) {
+    const hops = chain
+      .split(',')
+      .map((hop) => hop.trim())
+      .filter(Boolean);
+    if (hops.length > 0) return hops[hops.length - 1];
+  }
+  return req.socket?.remoteAddress ?? 'unattributed';
+}
+
+
+
 function sessionIdFrom(req: IncomingMessage): string | undefined {
   const header = req.headers[SESSION_HEADER];
   return Array.isArray(header) ? header[0] : header;
@@ -108,6 +156,24 @@ export function createMcpHttpApp(
 ): McpHttpApp {
   const sessions = new Map<string, Session>();
 
+  // Per-instance, deliberately. These counters bound creation of the sessions in the map above, so
+  // they belong to the same lifetime: at module scope one app's traffic would throttle another's,
+  // and closing an app would leave its counters behind.
+  let windowStartedAt = 0;
+  let newSessionsThisWindow = new Map<string, number>();
+
+  /** True when this source has already opened its allowance of sessions in the current window. */
+  function newSessionRateExceeded(source: string, now: number): boolean {
+    if (now - windowStartedAt >= RATE_WINDOW_MS) {
+      windowStartedAt = now;
+      newSessionsThisWindow = new Map();
+    }
+    const used = newSessionsThisWindow.get(source) ?? 0;
+    if (used >= MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE) return true;
+    newSessionsThisWindow.set(source, used + 1);
+    return false;
+  }
+
   function reapIdleSessions(): void {
     const cutoff = Date.now() - SESSION_IDLE_TIMEOUT_MS;
     for (const [id, session] of sessions) {
@@ -159,8 +225,41 @@ export function createMcpHttpApp(
       return;
     }
 
-    // No session id: a fresh initialize. Build a server and API client bound to this credential
-    // alone -- see createGremlinMcpServer for why sharing either across users cannot be done safely.
+    // No session id: a fresh initialize, which is the expensive path. Both bounds below run before
+    // anything is allocated.
+    const source = sourceKey(req);
+    if (newSessionRateExceeded(source, Date.now())) {
+      sendJson(
+        res,
+        429,
+        {
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Too many new sessions, retry shortly' },
+          id: null,
+        },
+        { 'Retry-After': '60' },
+      );
+      return;
+    }
+    if (sessions.size >= MAX_SESSIONS) {
+      process.stderr.write(
+        `Refusing new MCP session: at capacity (${sessions.size}/${MAX_SESSIONS})\n`,
+      );
+      sendJson(
+        res,
+        503,
+        {
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Server at capacity, retry shortly' },
+          id: null,
+        },
+        { 'Retry-After': '30' },
+      );
+      return;
+    }
+
+    // Build a server and API client bound to this credential alone -- see createGremlinMcpServer
+    // for why sharing either across users cannot be done safely.
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id: string) => {
