@@ -3,7 +3,11 @@ import type { AddressInfo } from 'node:net';
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { createMcpHttpApp, type ServerFactory } from '../../src/http/app';
+import {
+  createMcpHttpApp,
+  type CredentialValidator,
+  type ServerFactory,
+} from '../../src/http/app';
 import { PROTECTED_RESOURCE_PATH } from '../../src/auth/protected-resource';
 
 import type { GremlinCredential } from '../../src/auth/credential';
@@ -24,8 +28,17 @@ const INITIALIZE = {
 };
 
 /** Stands up the app on a real socket, so the assertions cover actual HTTP rather than a mock. */
-async function startApp(factory?: ServerFactory) {
-  const app = createMcpHttpApp(factory ? { createServerForCredential: factory } : {});
+async function startApp(
+  factory?: ServerFactory,
+  // Accepts every credential by default. The real validator calls the Gremlin API, which these
+  // tests must not do -- and a rejection from it would look exactly like a bug in the code under
+  // test. Rejection is exercised explicitly where that is the point.
+  validateCredential: CredentialValidator = async () => true,
+) {
+  const app = createMcpHttpApp({
+    ...(factory ? { createServerForCredential: factory } : {}),
+    validateCredential,
+  });
   const server: Server = createServer((req, res) => app.handle(req, res));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -198,6 +211,53 @@ describe('MCP HTTP app', () => {
       const limited = statuses.indexOf(429);
       // Everything after the first refusal stays refused within the window.
       expect(statuses.slice(limited).every((s) => s === 429)).toBe(true);
+    });
+
+    it('allocates nothing for a credential the API rejects', async () => {
+      // A gremlin_oat_ prefix used to be enough to get an McpServer with every tool registered, a
+      // GremlinApi and a response cache, parked for thirty idle minutes -- with the token unchecked
+      // until the first tool call. So junk tokens could fill the table to MAX_SESSIONS and every
+      // later connection got a 503, including ones that would have authenticated.
+      const factory = vi.fn<ServerFactory>(
+        () => ({ connect: vi.fn().mockResolvedValue(undefined) }) as never,
+      );
+      harness = await startApp(factory, async () => false);
+
+      const response = await mcpRequest(harness.origin, { token: TOKEN_A });
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get('www-authenticate')).toContain('error="invalid_token"');
+      expect(factory).not.toHaveBeenCalled();
+      expect(harness.app.sessionCount()).toBe(0);
+    });
+
+    it('probes once per credential rather than once per request', async () => {
+      // The flood this guards against is many distinct tokens, so each must cost one upstream
+      // probe and not one per request.
+      const validate = vi.fn<CredentialValidator>(async () => true);
+      harness = await startApp(undefined, validate);
+
+      const first = await mcpRequest(harness.origin, { token: TOKEN_A });
+      const sessionId = first.headers.get('mcp-session-id')!;
+      await mcpRequest(harness.origin, {
+        token: TOKEN_A,
+        sessionId,
+        body: { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+      });
+      // A second fresh connection on the same credential.
+      await mcpRequest(harness.origin, { token: TOKEN_A });
+
+      expect(validate).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets a credential through when validation is inconclusive', async () => {
+      // A transport failure or a 5xx is not evidence about the token. Treating it as a rejection
+      // would lock every user out of a working connector during an API blip.
+      harness = await startApp(undefined, async () => true);
+
+      const response = await mcpRequest(harness.origin, { token: TOKEN_A });
+
+      expect(response.status).toBe(200);
     });
 
     it('attributes a source behind a private-address hop to the real caller', async () => {

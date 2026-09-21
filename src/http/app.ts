@@ -10,6 +10,7 @@ import {
   buildProtectedResourceMetadata,
   PROTECTED_RESOURCE_PATH,
 } from '../auth/protected-resource';
+import { GremlinApi, GremlinApiError } from '../client/gremlin';
 import { createGremlinMcpServer } from '../server';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -66,6 +67,15 @@ const MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE = Number(
 );
 
 const RATE_WINDOW_MS = 60 * 1000;
+
+/**
+ * How long a validation outcome is trusted.
+ *
+ * <p>Short. This is not an authorization cache -- every tool call is still authorized by the API on
+ * its own merits -- it only avoids re-probing on the reconnect storms a client can produce. Long
+ * enough to absorb those, short enough that a revoked token stops opening new sessions promptly.
+ */
+const VALIDATION_TTL_MS = 60 * 1000;
 
 /**
  * Non-globally-routable ranges, which are our own infrastructure rather than a caller.
@@ -177,6 +187,26 @@ function sendUnauthorized(
  */
 export type ServerFactory = (credential: GremlinCredential) => McpServer;
 
+/**
+ * Confirms a credential is one the API accepts. Injectable so tests need no network.
+ *
+ * <p>Resolves false only for a definite rejection. Anything else -- a transport failure, a 5xx --
+ * is not evidence about the token and resolves true, so an API blip does not lock users out of a
+ * working connector. The first tool call will fail honestly if the token really is bad.
+ */
+export type CredentialValidator = (credential: GremlinCredential) => Promise<boolean>;
+
+/** The real probe: the smallest authenticated call the API offers. */
+export const validateAgainstApi: CredentialValidator = async (credential) => {
+  try {
+    await new GremlinApi(credential).getSelf();
+    return true;
+  } catch (error) {
+    const status = error instanceof GremlinApiError ? error.statusCode : undefined;
+    return !(status === 401 || status === 403);
+  }
+};
+
 export interface McpHttpApp {
   handle: (req: IncomingMessage, res: ServerResponse) => void;
   reapIdleSessions: () => void;
@@ -185,9 +215,49 @@ export interface McpHttpApp {
 }
 
 export function createMcpHttpApp(
-  { createServerForCredential = createGremlinMcpServer }: { createServerForCredential?: ServerFactory } = {},
+  {
+    createServerForCredential = createGremlinMcpServer,
+    validateCredential = validateAgainstApi,
+  }: {
+    createServerForCredential?: ServerFactory;
+    validateCredential?: CredentialValidator;
+  } = {},
 ): McpHttpApp {
   const sessions = new Map<string, Session>();
+
+  /**
+   * Validation outcomes keyed by credential fingerprint, with the time they were recorded.
+   *
+   * <p>Per-instance for the same reason the rate counters are.
+   */
+  const validated = new Map<string, { ok: boolean; at: number }>();
+
+  /**
+   * Confirms the credential is real before anything is allocated for it.
+   *
+   * <p>Previously a well-formed `gremlin_oat_` prefix was enough to get an McpServer with every
+   * tool registered, a GremlinApi and a response cache, parked in the session map for thirty idle
+   * minutes -- and the token was not checked against the API until the first tool call. So junk
+   * tokens could fill the table to MAX_SESSIONS and every subsequent connection got a 503,
+   * including ones that would have authenticated. The per-source rate limit bounds the rate, not
+   * the total, and a handful of addresses sustains a full table inside the idle window.
+   *
+   * <p>Caching negatives as well as positives is deliberate: a flood of distinct junk tokens is the
+   * case worth cheapening, and each distinct token is one upstream probe rather than one per
+   * request. `users/self` is the smallest authenticated call the API offers.
+   *
+   * <p>See {@link CredentialValidator} for why only a definite rejection counts as a failure.
+   */
+  async function credentialIsUsable(credential: GremlinCredential, fingerprint: string) {
+    const cached = validated.get(fingerprint);
+    if (cached && Date.now() - cached.at < VALIDATION_TTL_MS) {
+      return cached.ok;
+    }
+
+    const ok = await validateCredential(credential);
+    validated.set(fingerprint, { ok, at: Date.now() });
+    return ok;
+  }
 
   // Per-instance, deliberately. These counters bound creation of the sessions in the map above, so
   // they belong to the same lifetime: at module scope one app's traffic would throttle another's,
@@ -208,6 +278,13 @@ export function createMcpHttpApp(
   }
 
   function reapIdleSessions(): void {
+    // The validation cache is swept on the same tick, so it cannot grow without bound under a
+    // flood of distinct tokens -- which is the very traffic this cache exists to absorb.
+    const validationCutoff = Date.now() - VALIDATION_TTL_MS;
+    for (const [fingerprint, entry] of validated) {
+      if (entry.at < validationCutoff) validated.delete(fingerprint);
+    }
+
     const cutoff = Date.now() - SESSION_IDLE_TIMEOUT_MS;
     for (const [id, session] of sessions) {
       if (session.lastSeen < cutoff) {
@@ -288,6 +365,15 @@ export function createMcpHttpApp(
         },
         { 'Retry-After': '30' },
       );
+      return;
+    }
+
+    // Nothing is allocated for a credential the API rejects.
+    if (!(await credentialIsUsable(credential, fingerprint))) {
+      sendUnauthorized(res, {
+        error: 'invalid_token',
+        description: 'The access token was rejected by the Gremlin API',
+      });
       return;
     }
 
