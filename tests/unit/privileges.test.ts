@@ -4,6 +4,7 @@ import {
   createReadGremlinApiTool,
   getRunPrivileges,
 } from '../../src/tools/openapi';
+import * as specLoader from '../../src/openapi/spec-loader';
 import type { OpenApiSpec } from '../../src/openapi/spec-loader';
 
 // vi.mock is hoisted above all imports, so MOCK_SPEC must be defined via
@@ -277,6 +278,58 @@ describe('API tool handlers — privilege elicitation', () => {
 
     // POST /failure-flags/experiments requires EXPERIMENTS_WRITE, not a _RUN permission
     await tool.handler({ method: 'POST', path: '/failure-flags/experiments', body: {} });
+
+    expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
+    expect(mockApi.execute).toHaveBeenCalledOnce();
+  });
+});
+
+// ── spec-unavailable behaviour ────────────────────────────────────────────
+
+describe('API tool handlers — when the spec cannot be loaded', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('prompts anyway for a write, rather than silently skipping the check', async () => {
+    // This used to fail open: on a spec fetch failure runPrivileges stayed empty and no prompt
+    // happened at all, so a transient spec outage removed the confirmation from every endpoint
+    // that needed one. Unknown has to mean dangerous here -- we cannot tell whether the endpoint
+    // starts an experiment, and guessing "harmless" is the wrong direction for a call that might.
+    vi.mocked(specLoader.getSpec).mockRejectedValueOnce(new Error('spec unreachable'));
+    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockApi = makeMockApi();
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
+
+    await tool.handler({ path: '/some/endpoint' });
+
+    expect(mockServer.server.elicitInput).toHaveBeenCalledOnce();
+    expect(mockServer.server.elicitInput.mock.calls[0][0].message).toContain(
+      'could not be loaded',
+    );
+    expect(mockApi.execute).toHaveBeenCalledOnce();
+  });
+
+  it('blocks the write when the prompt is declined', async () => {
+    vi.mocked(specLoader.getSpec).mockRejectedValueOnce(new Error('spec unreachable'));
+    const mockServer = makeMockServer({ action: 'decline' });
+    const mockApi = makeMockApi();
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
+
+    await expect(tool.handler({ path: '/some/endpoint' })).rejects.toThrow(
+      /Execution cancelled/,
+    );
+    expect(mockApi.execute).not.toHaveBeenCalled();
+  });
+
+  it('does not prompt for a read, which cannot start anything', async () => {
+    // Failing closed on a GET would prompt on every read during a spec outage, for no gain.
+    vi.mocked(specLoader.getSpec).mockRejectedValueOnce(new Error('spec unreachable'));
+    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockApi = makeMockApi();
+    const tool = createReadGremlinApiTool(mockApi as never, mockServer as never);
+
+    await tool.handler({ path: '/some/endpoint' });
 
     expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
     expect(mockApi.execute).toHaveBeenCalledOnce();

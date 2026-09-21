@@ -141,13 +141,25 @@ const RESPONSE_CONTRACT = [
   'Only a 4xx/5xx response or a network-level failure calling the API is reported as a tool error, not in this envelope.',
 ].join(' ');
 
+/**
+ * Escape hatch for clients that cannot show an elicitation prompt.
+ *
+ * <p>Worth being clear about what this is not: it is an ordinary tool parameter, so the calling
+ * model sets it itself and nothing routes it past a person. It is not user consent and must not be
+ * described or relied on as though it were.
+ *
+ * <p>What actually asks a human is the tool's own `destructiveHint`, which makes the MCP client
+ * confirm the call before it is ever dispatched. The elicitation below is a second, more specific
+ * prompt for endpoints that start experiments; this field skips that second prompt for clients
+ * without elicitation support, on a call the client has already confirmed.
+ */
 const CONFIRM_EXECUTION_FIELD = z
   .boolean()
   .optional()
   .describe(
-    'Set to true to explicitly confirm execution of endpoints that require a *_RUN privilege, ' +
-      'bypassing the interactive elicitation prompt. Use this when your MCP client does not ' +
-      'support elicitation. Only set this after verifying the endpoint and parameters.',
+    'Set to true only when your MCP client does not support interactive prompts (elicitation). ' +
+      'This skips the extra confirmation for endpoints that can trigger live experiments; it is ' +
+      'not a substitute for asking the user. Verify the endpoint and parameters first.',
   );
 
 /**
@@ -170,29 +182,36 @@ function callGremlinApi(
     // Normalize the spec path: always leading slash, no substitutions yet.
     const specPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
 
-    // Check if this endpoint requires a *_RUN permission.
-    // Spec fetch is best-effort: if the spec is temporarily unreachable we log
-    // and continue rather than blocking every call. Elicitation errors
-    // are NOT swallowed — if the confirmation prompt fails or is unsupported,
-    // we must block the call rather than silently proceed.
+    // Check whether this endpoint requires a *_RUN permission.
+    //
+    // The spec fetch used to be purely best-effort: on failure runPrivileges stayed empty and no
+    // prompt happened at all, so a transient spec outage silently removed the confirmation from
+    // every endpoint that needed it. Unknown is now treated as dangerous for anything that is not
+    // a GET -- we cannot tell whether the endpoint starts an experiment, and guessing "harmless"
+    // is the wrong direction for a call that might.
     let runPrivileges: string[] = [];
+    let privilegesUnknown = false;
     try {
       const spec = await getSpec();
       runPrivileges = getRunPrivileges(spec, specPath, method);
     } catch (err) {
+      privilegesUnknown = method !== 'GET';
       console.error(
         `Warning: could not load spec to check permissions for ${method} ${specPath}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
 
-    if (runPrivileges.length > 0 && !confirmExecution) {
+    if ((runPrivileges.length > 0 || privilegesUnknown) && !confirmExecution) {
       let result;
       try {
         result = await mcpServer.server.elicitInput({
-          message:
-            `This endpoint requires the ${runPrivileges.join(', ')} privilege(s), which can ` +
-            `trigger live chaos experiments. Do you want to proceed?\n\n` +
-            `Endpoint: ${method} ${specPath}`,
+          message: privilegesUnknown
+            ? `The Gremlin API spec could not be loaded, so it is not known whether this ` +
+              `endpoint triggers a live chaos experiment. Do you want to proceed?\n\n` +
+              `Endpoint: ${method} ${specPath}`
+            : `This endpoint requires the ${runPrivileges.join(', ')} privilege(s), which can ` +
+              `trigger live chaos experiments. Do you want to proceed?\n\n` +
+              `Endpoint: ${method} ${specPath}`,
           requestedSchema: {
             type: 'object',
             properties: {
@@ -211,9 +230,12 @@ function callGremlinApi(
         // Fixable by the caller: pass confirmExecution: true instead of relying on elicitation.
         throw new GremlinApiError(
           `Cannot confirm execution of ${method} ${specPath}: the MCP client does not support ` +
-            `interactive prompts (elicitation). This endpoint requires the ` +
-            `${runPrivileges.join(', ')} privilege(s). Pass confirmExecution: true to bypass ` +
-            `the prompt and proceed directly. (${msg})`,
+            `interactive prompts (elicitation). ` +
+            (privilegesUnknown
+              ? `The API spec could not be loaded, so whether this endpoint triggers a live ` +
+                `experiment is unknown. `
+              : `This endpoint requires the ${runPrivileges.join(', ')} privilege(s). `) +
+            `Pass confirmExecution: true to bypass the prompt and proceed directly. (${msg})`,
           { isInputError: true },
         );
       }
