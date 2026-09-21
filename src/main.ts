@@ -4,10 +4,12 @@ import { z } from "zod";
 import { GremlinApi } from "./client/gremlin";
 import { registerResources } from "./resources/index.js";
 import { registerTools } from "./tools/index.js";
+import { getAuthHeader } from "./config";
 
-
-if (!process.env.GREMLIN_API_KEY) {
-  process.stderr.write("Error: GREMLIN_API_KEY environment variable is required\n");
+try {
+  getAuthHeader();
+} catch (err) {
+  process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 }
 
