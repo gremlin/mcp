@@ -200,6 +200,33 @@ describe('MCP HTTP app', () => {
       expect(statuses.slice(limited).every((s) => s === 429)).toBe(true);
     });
 
+    it('attributes a source behind a private-address hop to the real caller', async () => {
+      // The rightmost hop is not necessarily the caller: depending on how this server is fronted,
+      // a load balancer may append its own private address last. Taking that verbatim would
+      // collapse every caller into one bucket and turn a per-source limit into a global one that
+      // throttles all users together.
+      harness = await startApp();
+      const statuses: number[] = [];
+
+      for (let i = 0; i < 25; i++) {
+        const response = await fetch(`${harness.origin}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+            Authorization: `Bearer gremlin_oat_distinct_${i}`,
+            // Distinct real callers, each behind the same private infrastructure hop.
+            'X-Forwarded-For': `203.0.113.${i}, 10.0.0.5`,
+          },
+          body: JSON.stringify(INITIALIZE),
+        });
+        statuses.push(response.status);
+      }
+
+      // Each caller has its own budget, so none is refused for another's traffic.
+      expect(statuses.filter((s) => s === 429).length).toBe(0);
+    });
+
     it('does not count requests that reuse an established session', async () => {
       // A legitimate client makes many calls against one session and must never be throttled for
       // it; only creation is bounded.

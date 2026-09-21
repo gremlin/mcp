@@ -68,12 +68,42 @@ const MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE = Number(
 const RATE_WINDOW_MS = 60 * 1000;
 
 /**
- * The caller's address, preferring the rightmost forwarded hop.
+ * Non-globally-routable ranges, which are our own infrastructure rather than a caller.
  *
- * <p>Rightmost because a caller controls what it prepends to `X-Forwarded-For` and not what the
- * proxy in front of us appends; reading the leftmost entry would let one attacker present a fresh
- * identity per request and never reach a limit. Falls back to the socket address, then to a single
- * shared bucket, so unattributable traffic is bounded rather than exempt.
+ * <p>RFC 1918 private space, CGNAT, loopback, link-local, and the IPv6 equivalents.
+ */
+const NON_ROUTABLE = [
+  /^10\./,
+  /^127\./,
+  /^169\.254\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^192\.168\./,
+  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,
+  /^::1$/,
+  /^f[cd][0-9a-f]{2}:/i,
+  /^fe80:/i,
+];
+
+function isRoutable(address: string): boolean {
+  const bare = address.replace(/^\[|\]$/g, '').replace(/:\d+$/, '');
+  return bare.length > 0 && !NON_ROUTABLE.some((range) => range.test(bare));
+}
+
+/**
+ * The caller's address: the rightmost globally-routable hop in `X-Forwarded-For`.
+ *
+ * <p>Rightmost because a caller controls what it prepends and not what the proxy in front of us
+ * appends -- reading the leftmost entry would let one attacker mint a fresh identity per request
+ * and never reach a limit.
+ *
+ * <p>Globally-routable because the rightmost hop is not necessarily the caller. Depending on how
+ * this server is fronted, a load balancer may append its own private address last, and taking that
+ * verbatim would collapse every caller into one bucket -- turning a per-source limit into a global
+ * one that throttles all users together. Skipping non-routable hops lands on the real egress
+ * address whichever topology we end up deployed behind.
+ *
+ * <p>Falls back to the socket address, then to a single shared bucket, so unattributable traffic is
+ * bounded rather than exempt.
  */
 function sourceKey(req: IncomingMessage): string {
   const forwarded = req.headers['x-forwarded-for'];
@@ -83,9 +113,12 @@ function sourceKey(req: IncomingMessage): string {
       .split(',')
       .map((hop) => hop.trim())
       .filter(Boolean);
-    if (hops.length > 0) return hops[hops.length - 1];
+    for (let i = hops.length - 1; i >= 0; i--) {
+      if (isRoutable(hops[i])) return hops[i];
+    }
   }
-  return req.socket?.remoteAddress ?? 'unattributed';
+  const socketAddress = req.socket?.remoteAddress;
+  return socketAddress && isRoutable(socketAddress) ? socketAddress : 'unattributed';
 }
 
 
