@@ -586,7 +586,7 @@ export class GremlinApi {
   }
 
   /**
-   * Runs an arbitrary Gremlin API endpoint (backs execute_gremlin_api). Unlike
+   * Runs an arbitrary Gremlin API endpoint (backs the read/create/update/delete tools). Unlike
    * every typed method above — which can assume a JSON response — an arbitrary
    * call may return a non-JSON body (e.g. a bare-text UUID from a POST that
    * creates a resource), so this inspects content-type before deciding whether

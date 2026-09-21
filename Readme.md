@@ -48,6 +48,37 @@ because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` 
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. Source is the rightmost globally-routable `X-Forwarded-For` hop, so a private load-balancer hop does not collapse every caller into one bucket. |
 
+### Why the resource identifier is the MCP server, not the API
+
+`GREMLIN_MCP_RESOURCE_URL` is this server's own origin, and the access tokens Claude obtains are
+audienced for it. Conceptually that is a little off: the credential authorizes *this server* to
+reach `api.gremlin.com` on the user's behalf, and the API is what actually validates the token and
+applies the user's RBAC. By that reading the audience "should" be `https://api.gremlin.com`.
+
+It is not, for a concrete reason: Anthropic's connector requirements state that *the protected
+resource metadata document's `resource` field must match your MCP server URL exactly as the user
+enters it in Claude*. Declaring the API there would fail directory review, and Claude sends back
+whatever that field says regardless.
+
+The consequence is that `api.gremlin.com` must accept tokens audienced for `mcp.gremlin.com`, so
+its allow list (`GREMLIN_OAUTH_RESOURCES` on the service side) contains both hosts and the audience
+check cannot distinguish between them. That was accepted deliberately rather than overlooked:
+
+- The attack audience binding exists to stop — a token minted for resource A being replayed at
+  resource B — yields no privilege gain here, because the API applies the authorizing user's own
+  RBAC either way. An attacker holding the token can call the API directly instead, for the same
+  access.
+- The upstream path is closed separately: we support no Dynamic Client Registration, and
+  `redirect_uri` is an exact-match allow list, so a third-party resource cannot obtain a token from
+  our authorization server in the first place.
+
+**Revisit this if the topology changes.** Specifically: a second protected resource (another
+connector, a partner-operated MCP server), or this server leaving the API team's operational
+control. At that point the audience field stops being cosmetic, and the fix is RFC 8693 token
+exchange at this boundary — this server would validate its own `aud=mcp` token and exchange it for
+an `aud=api` one rather than forwarding. That needs an introspection endpoint or shared token-store
+access, plus a client credential for this server, which is why it was not worth paying up front.
+
 ### Hosted server endpoints
 
 | Path | Auth | Purpose |
@@ -217,9 +248,30 @@ Lists the distinct label keys observed across all of the team's containers (keys
 Searches the Gremlin OpenAPI spec for endpoints, returning method, path, parameters, and request body schema for each match.
 - **Parameters:** `query` (required), `method` (optional, enum: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`), `tag` (optional, partial/case-insensitive match), `limit` (optional, default: 10, max: 50)
 
-#### `execute_gremlin_api`
-Executes an arbitrary Gremlin API endpoint. Endpoints requiring a `*_RUN` privilege prompt for interactive confirmation unless bypassed; can trigger real chaos experiments.
-- **Parameters:** `method` (required, enum: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`), `path` (required, OpenAPI template syntax, leading slash optional), `pathParams` (optional), `queryParams` (optional), `body` (optional), `confirmExecution` (optional, bypasses the confirmation prompt)
+The API tools are split by HTTP safety class rather than taking a `method` parameter. A single tool
+spanning `GET` and `DELETE` cannot carry an honest `readOnlyHint`/`destructiveHint`, and those
+annotations are what decide whether Claude confirms a call. All four share one implementation, so
+path templating, the `*_RUN` privilege prompt, and error handling behave identically whichever you
+call.
+
+#### `read_gremlin_api`
+Reads any Gremlin API endpoint with a `GET`. The only API tool marked `readOnlyHint`, so it runs
+without per-call confirmation — it earns that by fixing the method rather than accepting one.
+- **Parameters:** `path` (required, OpenAPI template syntax, leading slash optional), `pathParams` (optional), `queryParams` (optional)
+
+#### `create_gremlin_api`
+Sends a `POST`, to create a resource or start a run. Marked `destructiveHint` despite creating
+rather than destroying: in Gremlin a `POST` is how a chaos experiment starts, so the call adds a
+record and takes down a production dependency. Claude prompting each time is correct.
+- **Parameters:** `path` (required), `pathParams` (optional), `queryParams` (optional), `body` (optional), `confirmExecution` (optional, bypasses the `*_RUN` prompt)
+
+#### `update_gremlin_api`
+Modifies an existing resource with `PUT` (replace) or `PATCH` (partial).
+- **Parameters:** `path` (required), `method` (required, enum: `PUT`, `PATCH`), `pathParams` (optional), `queryParams` (optional), `body` (optional), `confirmExecution` (optional)
+
+#### `delete_gremlin_api`
+Deletes a resource, or halts a running experiment.
+- **Parameters:** `path` (required), `pathParams` (optional), `queryParams` (optional), `confirmExecution` (optional)
 
 ## Usage Notes
 

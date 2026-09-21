@@ -35,7 +35,7 @@ describe('isJsonContentTypeHeader', () => {
   });
 });
 
-describe('GremlinApi#execute (execute_gremlin_api)', () => {
+describe('GremlinApi#execute (backs the read/create/update/delete API tools)', () => {
   let api: GremlinApi;
 
   beforeEach(() => {

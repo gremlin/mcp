@@ -4,6 +4,7 @@ import { GremlinApi, wrapGremlinError } from "../client/gremlin";
 export function createListTeamsTool(api: GremlinApi) {
     return {
         name: "list_teams",
+        title: "List Teams",
         description: "Lists all teams you have access to",
         schema: {},
         annotations: { readOnlyHint: true },
