@@ -11,12 +11,10 @@ const DEFAULT_AUTHORIZATION_SERVER = 'https://api.gremlin.com';
 export const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
 
 /**
- * This server's RFC 8707 resource identifier.
+ * This server's RFC 9728 resource identifier.
  *
- * <p>Compared as an exact string by the authorization server (RFC 8707 defers to RFC 3986 section
- * 6.2.1: no normalisation, no prefix matching), so this value, the `resource` field of the metadata
- * document, and whatever a client sends as `resource` must match byte for byte. It is normalised
- * once here -- trailing slash removed -- and never adjusted again downstream.
+ * <p>Normalised once here -- trailing slash removed -- and never adjusted again downstream, so this
+ * value and the `resource` field of the metadata document are the same string.
  *
  * <p>Host-only on purpose. RFC 9728 locates the metadata document by inserting the well-known path
  * between the identifier's host and its path, so an identifier with a path would have to be served
@@ -25,14 +23,16 @@ export const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
  *
  * <p>The convention is `https://<host>.gremlin.com`, and for the hosted server that is
  * `https://mcp.gremlin.com`: the MCP authorization spec makes the canonical resource identifier the
- * MCP server's own URL, which is what Claude reads from this document and sends to the
- * authorization server as `resource`. It must match the authorization server's allow list
- * (`GREMLIN_OAUTH_RESOURCES`) byte for byte -- there is no normalisation on either side beyond the
- * trailing slash stripped here.
+ * MCP server's own URL, which is what Claude reads from this document. Anthropic's directory
+ * review requires it to be the server URL exactly as the user enters it.
  *
- * <p>No default, deliberately: an identifier that disagrees with what the authorization server
- * audiences tokens for surfaces as an authentication failure with no obvious cause, and a wrong
- * default would be harder to notice than a missing one.
+ * <p>Claude also echoes it to the authorization server as `resource`. Gremlin's authorization
+ * server does not implement RFC 8707 and ignores the parameter -- see `doc/OAUTH.md` section 6 in
+ * the service repo for why -- so nothing has to agree with it beyond this document.
+ *
+ * <p>No default, deliberately: an identifier that disagrees with the URL the user typed surfaces as
+ * a discovery failure with no obvious cause, and a wrong default would be harder to notice than a
+ * missing one.
  */
 export function getResourceIdentifier(): string {
   const configured = process.env.GREMLIN_MCP_RESOURCE_URL?.trim();
