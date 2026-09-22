@@ -10,6 +10,7 @@ import {
 } from '../../src/http/app';
 import { PROTECTED_RESOURCE_PATH } from '../../src/auth/protected-resource';
 
+import { credentialFingerprint } from '../../src/auth/credential';
 import type { GremlinCredential } from '../../src/auth/credential';
 
 const RESOURCE = 'https://mcp.gremlin.com';
@@ -33,7 +34,11 @@ async function startApp(
   // Accepts every credential by default. The real validator calls the Gremlin API, which these
   // tests must not do -- and a rejection from it would look exactly like a bug in the code under
   // test. Rejection is exercised explicitly where that is the point.
-  validateCredential: CredentialValidator = async () => true,
+  // Each distinct token resolves to its own subject by default, which is what the production
+  // validator does for distinct users. Tests that care about rotation or sharing override it.
+  validateCredential: CredentialValidator = async (credential) => ({
+    subject: `subject-for-${credential.value}`,
+  }),
 ) {
   const app = createMcpHttpApp({
     ...(factory ? { createServerForCredential: factory } : {}),
@@ -107,6 +112,34 @@ describe('MCP HTTP app', () => {
       expect(response.headers.get('www-authenticate')).toContain(
         `resource_metadata="${RESOURCE}${PROTECTED_RESOURCE_PATH}"`,
       );
+    });
+
+    it('rejects a request carrying a browser Origin', async () => {
+      // The MCP transport spec requires Origin validation. Unreachable from a page in practice --
+      // no CORS headers are returned and a browser will not set Authorization cross-origin -- but
+      // it is a conformance item review may look for.
+      harness = await startApp();
+
+      const response = await fetch(`${harness.origin}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${TOKEN_A}`,
+          Origin: 'https://attacker.test',
+        },
+        body: JSON.stringify(INITIALIZE),
+      });
+
+      expect(response.status).toBe(403);
+      expect(harness.app.sessionCount()).toBe(0);
+    });
+
+    it('accepts a request with no Origin, which is what a server sends', async () => {
+      harness = await startApp();
+
+      const response = await mcpRequest(harness.origin, { token: TOKEN_A });
+
+      expect(response.status).toBe(200);
     });
 
     it('rejects a static API key on the hosted transport', async () => {
@@ -221,7 +254,7 @@ describe('MCP HTTP app', () => {
       const factory = vi.fn<ServerFactory>(
         () => ({ connect: vi.fn().mockResolvedValue(undefined) }) as never,
       );
-      harness = await startApp(factory, async () => false);
+      harness = await startApp(factory, async () => null);
 
       const response = await mcpRequest(harness.origin, { token: TOKEN_A });
 
@@ -234,7 +267,7 @@ describe('MCP HTTP app', () => {
     it('probes once per credential rather than once per request', async () => {
       // The flood this guards against is many distinct tokens, so each must cost one upstream
       // probe and not one per request.
-      const validate = vi.fn<CredentialValidator>(async () => true);
+      const validate = vi.fn<CredentialValidator>(async () => ({ subject: 'user-a' }));
       harness = await startApp(undefined, validate);
 
       const first = await mcpRequest(harness.origin, { token: TOKEN_A });
@@ -253,11 +286,36 @@ describe('MCP HTTP app', () => {
     it('lets a credential through when validation is inconclusive', async () => {
       // A transport failure or a 5xx is not evidence about the token. Treating it as a rejection
       // would lock every user out of a working connector during an API blip.
-      harness = await startApp(undefined, async () => true);
+      harness = await startApp(undefined, async (credential) => ({
+        subject: credentialFingerprint(credential),
+        unknown: true,
+      }));
 
       const response = await mcpRequest(harness.origin, { token: TOKEN_A });
 
       expect(response.status).toBe(200);
+    });
+
+    it('survives the hourly token refresh it is meant to outlast', async () => {
+      // The defect this closes. The session was bound to sha256(token value), and Claude refreshes
+      // its access token about hourly -- so an hour in, every legitimate session was rejected with
+      // invalid_token and a fresh server, API client and cache allocated in its place. Binding to
+      // the user keeps the security property and survives rotation, which is the point of having
+      // refresh tokens at all.
+      harness = await startApp(undefined, async () => ({ subject: 'company-1:user-1' }));
+
+      const initialized = await mcpRequest(harness.origin, { token: 'gremlin_oat_before_refresh' });
+      const sessionId = initialized.headers.get('mcp-session-id')!;
+
+      const afterRefresh = await mcpRequest(harness.origin, {
+        // A different token value for the same user, which is exactly what a refresh produces.
+        token: 'gremlin_oat_after_refresh',
+        sessionId,
+        body: { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+      });
+
+      expect(afterRefresh.status).toBe(200);
+      expect(harness.app.sessionCount()).toBe(1);
     });
 
     it('attributes a source behind a private-address hop to the real caller', async () => {

@@ -46,6 +46,7 @@ because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` 
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
 | `PORT` | No | `8080` | HTTP listen port. |
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
+| `GREMLIN_MCP_ALLOWED_ORIGINS` | No | *(none)* | Comma-separated browser origins permitted to call `/mcp`. Requests with no `Origin` are allowed — the legitimate caller is a server, not a browser — and any present value must be listed. Only needed for local development against a browser-based MCP client. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. Source is the rightmost globally-routable `X-Forwarded-For` hop, so a private load-balancer hop does not collapse every caller into one bucket. |
 
 ### Why the resource identifier is the MCP server, not the API

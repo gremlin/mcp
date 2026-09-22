@@ -30,7 +30,15 @@ const SESSION_HEADER = 'mcp-session-id';
  */
 interface Session {
   transport: StreamableHTTPServerTransport;
-  fingerprint: string;
+  /**
+   * The user this session belongs to, from {@link CredentialIdentity}.
+   *
+   * <p>Not the credential. A session id alone is a bearer credential once established -- nothing
+   * would look at the token again after initialize -- so attaching requires presenting a credential
+   * that resolves to this same subject. Binding to the token itself instead meant an hourly refresh
+   * looked exactly like a different caller.
+   */
+  subject: string;
   lastSeen: number;
 }
 
@@ -133,13 +141,37 @@ function sourceKey(req: IncomingMessage): string {
 
 
 
+/**
+ * Rejects a browser-originated request to the MCP endpoint.
+ *
+ * <p>The MCP HTTP transport spec requires servers to validate `Origin`. In practice this endpoint
+ * is already unreachable from a page: it returns no CORS headers, and a browser will not let script
+ * set an `Authorization` header cross-origin. So this is defence in depth and a spec conformance
+ * item rather than a live hole -- but it is also the kind of thing directory review looks for, and
+ * the cost is one header read.
+ *
+ * <p>Absent `Origin` is allowed: the legitimate caller is Anthropic's server, which is not a
+ * browser and sends none. Any present value is refused, because there is no origin that has
+ * business driving this endpoint from a page. Configurable for local development against a browser
+ * MCP client.
+ */
+function originIsAcceptable(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  const allowed = (process.env.GREMLIN_MCP_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return allowed.includes(origin);
+}
+
 function sessionIdFrom(req: IncomingMessage): string | undefined {
   const header = req.headers[SESSION_HEADER];
   return Array.isArray(header) ? header[0] : header;
 }
 
-/** Constant-time compare, so a fingerprint cannot be recovered by timing the mismatch. */
-function fingerprintMatches(a: string, b: string): boolean {
+/** Constant-time compare, so a subject cannot be recovered by timing the mismatch. */
+function subjectMatches(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   if (left.length !== right.length) return false;
@@ -194,16 +226,41 @@ export type ServerFactory = (credential: GremlinCredential) => McpServer;
  * is not evidence about the token and resolves true, so an API blip does not lock users out of a
  * working connector. The first tool call will fail honestly if the token really is bad.
  */
-export type CredentialValidator = (credential: GremlinCredential) => Promise<boolean>;
+export type CredentialValidator = (
+  credential: GremlinCredential,
+) => Promise<CredentialIdentity | null>;
+
+/**
+ * Who a credential belongs to.
+ *
+ * <p>`subject` is what a session is bound to. It has to be the *user*, not the credential: Claude
+ * refreshes its access token about hourly, so binding to the token meant every legitimate session
+ * was rejected an hour after it opened, with `invalid_token`, and a fresh server, API client and
+ * cache allocated in its place. The security property is unchanged -- a leaked session id still
+ * needs a credential resolving to the same user -- and it now survives rotation, which is the
+ * whole point of having refresh tokens.
+ *
+ * <p>`unknown` marks the case where the API could not tell us: a transport failure or a 5xx, which
+ * is not evidence about the token. Those are allowed through rather than locking users out of a
+ * working connector during an API blip, but they cannot be bound to a subject, so they fall back to
+ * the credential itself.
+ */
+export interface CredentialIdentity {
+  subject: string;
+  unknown?: boolean;
+}
 
 /** The real probe: the smallest authenticated call the API offers. */
 export const validateAgainstApi: CredentialValidator = async (credential) => {
   try {
-    await new GremlinApi(credential).getSelf();
-    return true;
+    const self = await new GremlinApi(credential).getSelf();
+    return { subject: `${self.company_id}:${self.user_id}` };
   } catch (error) {
     const status = error instanceof GremlinApiError ? error.statusCode : undefined;
-    return !(status === 401 || status === 403);
+    if (status === 401 || status === 403) {
+      return null;
+    }
+    return { subject: credentialFingerprint(credential), unknown: true };
   }
 };
 
@@ -230,7 +287,7 @@ export function createMcpHttpApp(
    *
    * <p>Per-instance for the same reason the rate counters are.
    */
-  const validated = new Map<string, { ok: boolean; at: number }>();
+  const validated = new Map<string, { identity: CredentialIdentity | null; at: number }>();
 
   /**
    * Confirms the credential is real before anything is allocated for it.
@@ -248,15 +305,15 @@ export function createMcpHttpApp(
    *
    * <p>See {@link CredentialValidator} for why only a definite rejection counts as a failure.
    */
-  async function credentialIsUsable(credential: GremlinCredential, fingerprint: string) {
+  async function identify(credential: GremlinCredential, fingerprint: string) {
     const cached = validated.get(fingerprint);
     if (cached && Date.now() - cached.at < VALIDATION_TTL_MS) {
-      return cached.ok;
+      return cached.identity;
     }
 
-    const ok = await validateCredential(credential);
-    validated.set(fingerprint, { ok, at: Date.now() });
-    return ok;
+    const identity = await validateCredential(credential);
+    validated.set(fingerprint, { identity, at: Date.now() });
+    return identity;
   }
 
   // Per-instance, deliberately. These counters bound creation of the sessions in the map above, so
@@ -295,6 +352,15 @@ export function createMcpHttpApp(
   }
 
   async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!originIsAcceptable(req)) {
+      sendJson(res, 403, {
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Origin not allowed' },
+        id: null,
+      });
+      return;
+    }
+
     const token = bearerTokenFrom(req.headers.authorization);
 
     // No credential at all. This is the discovery bootstrap: Claude's first request looks exactly
@@ -306,8 +372,19 @@ export function createMcpHttpApp(
     }
 
     const credential = oauthCredential(token);
+    // The cache key is still the credential -- one probe per distinct token, which is what makes a
+    // flood of junk tokens cheap. What the session binds to is the subject that comes back.
     const fingerprint = credentialFingerprint(credential);
     const sessionId = sessionIdFrom(req);
+
+    const identity = await identify(credential, fingerprint);
+    if (identity === null) {
+      sendUnauthorized(res, {
+        error: 'invalid_token',
+        description: 'The access token was rejected by the Gremlin API',
+      });
+      return;
+    }
 
     if (sessionId) {
       const existing = sessions.get(sessionId);
@@ -320,13 +397,15 @@ export function createMcpHttpApp(
         });
         return;
       }
-      if (!fingerprintMatches(existing.fingerprint, fingerprint)) {
-        // Right session id, different credential. Either a stolen id or a client that refreshed
-        // into a token belonging to somebody else; in both cases continuing would let this caller
-        // act as the session's owner.
+      if (!subjectMatches(existing.subject, identity.subject)) {
+        // Right session id, different user. Either a stolen id or a credential belonging to
+        // somebody else; in both cases continuing would let this caller act as the session's owner.
+        //
+        // Compared on the subject rather than the credential, so Claude refreshing its access
+        // token -- which it does about hourly -- is not mistaken for a different caller.
         sendUnauthorized(res, {
           error: 'invalid_token',
-          description: 'Session belongs to a different credential',
+          description: 'Session belongs to a different user',
         });
         return;
       }
@@ -368,21 +447,12 @@ export function createMcpHttpApp(
       return;
     }
 
-    // Nothing is allocated for a credential the API rejects.
-    if (!(await credentialIsUsable(credential, fingerprint))) {
-      sendUnauthorized(res, {
-        error: 'invalid_token',
-        description: 'The access token was rejected by the Gremlin API',
-      });
-      return;
-    }
-
     // Build a server and API client bound to this credential alone -- see createGremlinMcpServer
     // for why sharing either across users cannot be done safely.
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id: string) => {
-        sessions.set(id, { transport, fingerprint, lastSeen: Date.now() });
+        sessions.set(id, { transport, subject: identity.subject, lastSeen: Date.now() });
       },
       onsessionclosed: (id: string) => {
         sessions.delete(id);
