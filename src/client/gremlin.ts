@@ -654,7 +654,7 @@ export class GremlinApi {
         ...fetchOptions,
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': authorizationHeader(this.credential),
+            'Authorization': await authorizationHeader(this.credential),
             'User-Agent': this.userAgent,
             ...fetchOptions.headers,
         },

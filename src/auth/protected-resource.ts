@@ -26,9 +26,10 @@ export const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
  * MCP server's own URL, which is what Claude reads from this document. Anthropic's directory
  * review requires it to be the server URL exactly as the user enters it.
  *
- * <p>Claude also echoes it to the authorization server as `resource`. Gremlin's authorization
- * server does not implement RFC 8707 and ignores the parameter -- see `doc/OAUTH.md` section 6 in
- * the service repo for why -- so nothing has to agree with it beyond this document.
+ * <p>Claude also echoes it to the authorization server as `resource`, which records it as the
+ * token's audience (RFC 8707). That audience is what the token exchange checks before it will
+ * trade a token for one usable at the Gremlin API, so this value and the authorization server's
+ * resource allow list have to agree exactly.
  *
  * <p>No default, deliberately: an identifier that disagrees with the URL the user typed surfaces as
  * a discovery failure with no obvious cause, and a wrong default would be harder to notice than a
@@ -139,4 +140,34 @@ function stripTrailingSlash(url: string): string {
 function escapeQuoted(value: string): string {
   // RFC 9110 quoted-string: backslash and double quote must be escaped.
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * This server's own OAuth client credentials, used to authenticate at the token endpoint when
+ * exchanging a user's token for one it may present to the Gremlin API.
+ *
+ * <p>Required, with no default. A missing secret would otherwise surface as every tool call
+ * failing authorization, which is a long way from the cause.
+ */
+export function getExchangeClientCredentials(): { clientId: string; clientSecret: string } {
+  const clientId = process.env.GREMLIN_MCP_OAUTH_CLIENT_ID?.trim();
+  const clientSecret = process.env.GREMLIN_MCP_OAUTH_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      'GREMLIN_MCP_OAUTH_CLIENT_ID and GREMLIN_MCP_OAUTH_CLIENT_SECRET are required',
+    );
+  }
+  return { clientId, clientSecret };
+}
+
+/**
+ * The audience this server asks for when exchanging: the Gremlin API.
+ *
+ * <p>Distinct from {@link getResourceIdentifier}, and the distinction is the entire point of the
+ * exchange. Tokens arrive audienced for this server; the API is a different resource with its own
+ * users, keys and lifecycle, so a token for one must not be a token for the other.
+ */
+export function getApiResourceIdentifier(): string {
+  const configured = process.env.GREMLIN_API_RESOURCE_URL?.trim();
+  return stripTrailingSlash(configured || DEFAULT_AUTHORIZATION_SERVER);
 }

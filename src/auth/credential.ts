@@ -7,7 +7,22 @@
  */
 export type GremlinCredential =
   | { readonly kind: 'apiKey'; readonly value: string }
-  | { readonly kind: 'oauth'; readonly value: string };
+  | { readonly kind: 'oauth'; readonly value: string }
+  /**
+   * A credential the hosted server obtained for itself, on a user's behalf, by RFC 8693 exchange.
+   *
+   * `value` is the *client's* token, kept only as the identity this delegation belongs to and as
+   * the input to the next exchange. It is never sent anywhere as a credential. `resolve` returns a
+   * currently-valid API token, exchanging again when the last one is close to expiry.
+   *
+   * This variant is what makes the passthrough structurally impossible rather than merely avoided:
+   * there is no code path from here to an `Authorization` header carrying the client's token.
+   */
+  | {
+      readonly kind: 'delegated';
+      readonly value: string;
+      readonly resolve: () => Promise<string>;
+    };
 
 import { createHash } from 'node:crypto';
 
@@ -37,8 +52,14 @@ export function credentialFingerprint(credential: GremlinCredential): string {
     .digest('hex');
 }
 
-/** The `Authorization` header value this credential presents. */
-export function authorizationHeader(credential: GremlinCredential): string {
+/**
+ * The `Authorization` header value this credential presents.
+ *
+ * Asynchronous because a delegated credential may have to exchange for a fresh API token first.
+ * Resolving it per request rather than once per session is deliberate: an exchanged token is
+ * short-lived, and that shortness is what bounds how long a revoked grant keeps working here.
+ */
+export async function authorizationHeader(credential: GremlinCredential): Promise<string> {
   switch (credential.kind) {
     case 'apiKey':
       return `Key ${credential.value}`;
@@ -46,6 +67,9 @@ export function authorizationHeader(credential: GremlinCredential): string {
       // RFC 6750. The API distinguishes an OAuth access token from an internal session token by the
       // `gremlin_oat_` prefix on the value, not by the scheme, so this stays a plain Bearer.
       return `Bearer ${credential.value}`;
+    case 'delegated':
+      // Note what is not here: `credential.value`. The client's token never reaches a header.
+      return `Bearer ${await credential.resolve()}`;
   }
 }
 
@@ -68,4 +92,17 @@ export function apiKeyCredentialFromEnvironment(): GremlinCredential {
 /** The credential for one authenticated user of the hosted server. */
 export function oauthCredential(accessToken: string): GremlinCredential {
   return { kind: 'oauth', value: accessToken };
+}
+
+/**
+ * A credential for acting on a user's behalf at the Gremlin API.
+ *
+ * `subjectToken` is the client's own access token. It is kept as the identity this delegation
+ * belongs to and as the input to the next exchange -- never as something presented upstream.
+ */
+export function delegatedCredential(
+  subjectToken: string,
+  resolve: () => Promise<string>,
+): GremlinCredential {
+  return { kind: 'delegated', value: subjectToken, resolve };
 }

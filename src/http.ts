@@ -1,7 +1,13 @@
 import { createServer } from 'node:http';
 
-import { createMcpHttpApp } from './http/app';
-import { getResourceIdentifier } from './auth/protected-resource';
+import { createMcpHttpApp, exchangeForApiCredential } from './http/app';
+import {
+  getApiResourceIdentifier,
+  getAuthorizationServer,
+  getExchangeClientCredentials,
+  getResourceIdentifier,
+} from './auth/protected-resource';
+import { TokenExchanger } from './auth/token-exchange';
 
 /**
  * The hosted, OAuth-authenticated server.
@@ -20,7 +26,18 @@ import { getResourceIdentifier } from './auth/protected-resource';
 // failure with no obvious cause.
 const resourceIdentifier = getResourceIdentifier();
 
-const app = createMcpHttpApp();
+// Also at startup, for the same reason: without these this server cannot exchange a token, and
+// every request would fail authorization for a cause nothing in the logs would name.
+const { clientId, clientSecret } = getExchangeClientCredentials();
+
+const exchanger = new TokenExchanger({
+  tokenEndpoint: `${getAuthorizationServer()}/v1/oauth2/token`,
+  clientId,
+  clientSecret,
+  targetResource: getApiResourceIdentifier(),
+});
+
+const app = createMcpHttpApp({ validateCredential: exchangeForApiCredential(exchanger) });
 const httpServer = createServer((req, res) => app.handle(req, res));
 
 const reaper = setInterval(() => app.reapIdleSessions(), 60_000);

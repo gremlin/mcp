@@ -7,10 +7,11 @@ import {
   createMcpHttpApp,
   type CredentialValidator,
   type ServerFactory,
+  type ValidationOutcome,
 } from '../../src/http/app';
 import { PROTECTED_RESOURCE_PATH } from '../../src/auth/protected-resource';
 
-import { credentialFingerprint } from '../../src/auth/credential';
+import { credentialFingerprint, oauthCredential } from '../../src/auth/credential';
 import type { GremlinCredential } from '../../src/auth/credential';
 
 const RESOURCE = 'https://mcp.gremlin.com';
@@ -28,6 +29,20 @@ const INITIALIZE = {
   },
 };
 
+/**
+ * A successful validation, in the shape the app expects.
+ *
+ * The credential handed back is an ordinary oauth one rather than a delegated one: these tests are
+ * about session isolation and lifecycle, and no request reaches the Gremlin API.
+ */
+function ok(subject: string): ValidationOutcome {
+  return {
+    status: 'ok',
+    identity: { subject },
+    credential: oauthCredential(`token-for-${subject}`),
+  };
+}
+
 /** Stands up the app on a real socket, so the assertions cover actual HTTP rather than a mock. */
 async function startApp(
   factory?: ServerFactory,
@@ -36,9 +51,7 @@ async function startApp(
   // test. Rejection is exercised explicitly where that is the point.
   // Each distinct token resolves to its own subject by default, which is what the production
   // validator does for distinct users. Tests that care about rotation or sharing override it.
-  validateCredential: CredentialValidator = async (credential) => ({
-    subject: `subject-for-${credential.value}`,
-  }),
+  validateCredential: CredentialValidator = async (accessToken) => ok(`subject-for-${accessToken}`),
 ) {
   const app = createMcpHttpApp({
     ...(factory ? { createServerForCredential: factory } : {}),
@@ -173,9 +186,11 @@ describe('MCP HTTP app', () => {
       await mcpRequest(harness.origin, { token: TOKEN_B });
 
       expect(factory).toHaveBeenCalledTimes(2);
+      // Two distinct credentials, which is the property that keeps one user's cached responses
+      // away from another. The exact values come from the stub validator.
       expect(credentials).toEqual([
-        { kind: 'oauth', value: TOKEN_A },
-        { kind: 'oauth', value: TOKEN_B },
+        { kind: 'oauth', value: `token-for-subject-for-${TOKEN_A}` },
+        { kind: 'oauth', value: `token-for-subject-for-${TOKEN_B}` },
       ]);
       // Distinct instances, not one memoised server handed to both.
       expect(factory.mock.results[0].value).not.toBe(factory.mock.results[1].value);
@@ -254,7 +269,7 @@ describe('MCP HTTP app', () => {
       const factory = vi.fn<ServerFactory>(
         () => ({ connect: vi.fn().mockResolvedValue(undefined) }) as never,
       );
-      harness = await startApp(factory, async () => null);
+      harness = await startApp(factory, async () => ({ status: 'invalid' }));
 
       const response = await mcpRequest(harness.origin, { token: TOKEN_A });
 
@@ -267,7 +282,7 @@ describe('MCP HTTP app', () => {
     it('probes once per credential rather than once per request', async () => {
       // The flood this guards against is many distinct tokens, so each must cost one upstream
       // probe and not one per request.
-      const validate = vi.fn<CredentialValidator>(async () => ({ subject: 'user-a' }));
+      const validate = vi.fn<CredentialValidator>(async () => ok('user-a'));
       harness = await startApp(undefined, validate);
 
       const first = await mcpRequest(harness.origin, { token: TOKEN_A });
@@ -286,9 +301,10 @@ describe('MCP HTTP app', () => {
     it('lets a credential through when validation is inconclusive', async () => {
       // A transport failure or a 5xx is not evidence about the token. Treating it as a rejection
       // would lock every user out of a working connector during an API blip.
-      harness = await startApp(undefined, async (credential) => ({
-        subject: credentialFingerprint(credential),
-        unknown: true,
+      harness = await startApp(undefined, async (accessToken) => ({
+        status: 'ok',
+        identity: { subject: credentialFingerprint(oauthCredential(accessToken)), unknown: true },
+        credential: oauthCredential(accessToken),
       }));
 
       const response = await mcpRequest(harness.origin, { token: TOKEN_A });
@@ -302,7 +318,7 @@ describe('MCP HTTP app', () => {
       // invalid_token and a fresh server, API client and cache allocated in its place. Binding to
       // the user keeps the security property and survives rotation, which is the point of having
       // refresh tokens at all.
-      harness = await startApp(undefined, async () => ({ subject: 'company-1:user-1' }));
+      harness = await startApp(undefined, async () => ok('company-1:user-1'));
 
       const initialized = await mcpRequest(harness.origin, { token: 'gremlin_oat_before_refresh' });
       const sessionId = initialized.headers.get('mcp-session-id')!;

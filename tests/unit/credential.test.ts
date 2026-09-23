@@ -8,12 +8,12 @@ import {
 } from '../../src/auth/credential';
 
 describe('authorizationHeader', () => {
-  it('presents an API key under the Gremlin Key scheme', () => {
-    expect(authorizationHeader({ kind: 'apiKey', value: 'abc' })).toBe('Key abc');
+  it('presents an API key under the Gremlin Key scheme', async () => {
+    expect(await authorizationHeader({ kind: 'apiKey', value: 'abc' })).toBe('Key abc');
   });
 
-  it('presents an OAuth access token as an RFC 6750 bearer', () => {
-    expect(authorizationHeader(oauthCredential('gremlin_oat_xyz'))).toBe('Bearer gremlin_oat_xyz');
+  it('presents an OAuth access token as an RFC 6750 bearer', async () => {
+    expect(await authorizationHeader(oauthCredential('gremlin_oat_xyz'))).toBe('Bearer gremlin_oat_xyz');
   });
 });
 

@@ -3,7 +3,13 @@ import { type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
-import { credentialFingerprint, oauthCredential, type GremlinCredential } from '../auth/credential';
+import {
+  credentialFingerprint,
+  delegatedCredential,
+  oauthCredential,
+  type GremlinCredential,
+} from '../auth/credential';
+import { TokenExchanger } from '../auth/token-exchange';
 import {
   bearerTokenFrom,
   buildChallenge,
@@ -220,15 +226,22 @@ function sendUnauthorized(
 export type ServerFactory = (credential: GremlinCredential) => McpServer;
 
 /**
- * Confirms a credential is one the API accepts. Injectable so tests need no network.
+ * Turns a client's access token into a credential this server may use, or explains why it cannot.
  *
- * <p>Resolves false only for a definite rejection. Anything else -- a transport failure, a 5xx --
- * is not evidence about the token and resolves true, so an API blip does not lock users out of a
- * working connector. The first tool call will fail honestly if the token really is bad.
+ * <p>Injectable so tests need no network.
+ *
+ * <p>The four outcomes are distinct because Claude reacts to each differently, and collapsing any
+ * two of them produces a visibly broken connector: `invalid` must become a 401 so the OAuth flow
+ * runs again, `forbidden` a terminal 403, and `unavailable` a 503. A transport failure or a 5xx is
+ * not evidence about the token, so it must never be reported as `invalid`.
  */
-export type CredentialValidator = (
-  credential: GremlinCredential,
-) => Promise<CredentialIdentity | null>;
+export type CredentialValidator = (accessToken: string) => Promise<ValidationOutcome>;
+
+export type ValidationOutcome =
+  | { status: 'ok'; identity: CredentialIdentity; credential: GremlinCredential }
+  | { status: 'invalid' }
+  | { status: 'forbidden' }
+  | { status: 'unavailable' };
 
 /**
  * Who a credential belongs to.
@@ -250,19 +263,61 @@ export interface CredentialIdentity {
   unknown?: boolean;
 }
 
-/** The real probe: the smallest authenticated call the API offers. */
-export const validateAgainstApi: CredentialValidator = async (credential) => {
-  try {
-    const self = await new GremlinApi(credential).getSelf();
-    return { subject: `${self.company_id}:${self.user_id}` };
-  } catch (error) {
-    const status = error instanceof GremlinApiError ? error.statusCode : undefined;
-    if (status === 401 || status === 403) {
-      return null;
+/**
+ * The real path: exchange the client's token for one of our own, then ask who it belongs to.
+ *
+ * <p>The exchange is the validation. The authorization server refuses to exchange a token that is
+ * expired, revoked, or minted for somewhere other than this server, so a successful exchange is
+ * proof of all three -- and unlike the call it replaces, it does not require *using* the client's
+ * credential to learn anything about it.
+ *
+ * <p>`getSelf` still runs, but with the exchanged token and only to learn the subject a session
+ * binds to. That is our own credential at our own upstream, which is an ordinary API call rather
+ * than passthrough.
+ */
+export function exchangeForApiCredential(exchanger: TokenExchanger): CredentialValidator {
+  return async (accessToken) => {
+    const exchanged = await exchanger.exchange(accessToken);
+    if (!exchanged.ok) {
+      return exchanged.reason === 'invalid'
+        ? { status: 'invalid' }
+        : exchanged.reason === 'forbidden'
+          ? { status: 'forbidden' }
+          : { status: 'unavailable' };
     }
-    return { subject: credentialFingerprint(credential), unknown: true };
-  }
-};
+
+    const credential = delegatedCredential(accessToken, async () => {
+      const current = await exchanger.exchange(accessToken);
+      if (!current.ok) {
+        throw new GremlinApiError('Token exchange failed', {
+          isInputError: false,
+          statusCode: current.reason === 'invalid' ? 401 : 503,
+          noRetry: current.reason !== 'unavailable',
+        });
+      }
+      return current.accessToken;
+    });
+
+    try {
+      const self = await new GremlinApi(credential).getSelf();
+      return { status: 'ok', identity: { subject: `${self.company_id}:${self.user_id}` }, credential };
+    } catch (error) {
+      const status = error instanceof GremlinApiError ? error.statusCode : undefined;
+      if (status === 401 || status === 403) {
+        // The exchange succeeded but the derived token was refused. Treat it as a transient
+        // upstream disagreement rather than a verdict on the client's token, which the
+        // authorization server has already accepted.
+        exchanger.forget(accessToken);
+        return { status: 'unavailable' };
+      }
+      return {
+        status: 'ok',
+        identity: { subject: credentialFingerprint(credential), unknown: true },
+        credential,
+      };
+    }
+  };
+}
 
 export interface McpHttpApp {
   handle: (req: IncomingMessage, res: ServerResponse) => void;
@@ -274,11 +329,11 @@ export interface McpHttpApp {
 export function createMcpHttpApp(
   {
     createServerForCredential = createGremlinMcpServer,
-    validateCredential = validateAgainstApi,
+    validateCredential,
   }: {
     createServerForCredential?: ServerFactory;
-    validateCredential?: CredentialValidator;
-  } = {},
+    validateCredential: CredentialValidator;
+  },
 ): McpHttpApp {
   const sessions = new Map<string, Session>();
 
@@ -287,7 +342,7 @@ export function createMcpHttpApp(
    *
    * <p>Per-instance for the same reason the rate counters are.
    */
-  const validated = new Map<string, { identity: CredentialIdentity | null; at: number }>();
+  const validated = new Map<string, { outcome: ValidationOutcome; at: number }>();
 
   /**
    * Confirms the credential is real before anything is allocated for it.
@@ -305,15 +360,19 @@ export function createMcpHttpApp(
    *
    * <p>See {@link CredentialValidator} for why only a definite rejection counts as a failure.
    */
-  async function identify(credential: GremlinCredential, fingerprint: string) {
+  async function identify(accessToken: string, fingerprint: string): Promise<ValidationOutcome> {
     const cached = validated.get(fingerprint);
     if (cached && Date.now() - cached.at < VALIDATION_TTL_MS) {
-      return cached.identity;
+      return cached.outcome;
     }
 
-    const identity = await validateCredential(credential);
-    validated.set(fingerprint, { identity, at: Date.now() });
-    return identity;
+    const outcome = await validateCredential(accessToken);
+    // Only a settled answer is cached. `unavailable` says nothing about the token, so remembering
+    // it would extend an authorization-server blip into a minutes-long outage of our own.
+    if (outcome.status !== 'unavailable') {
+      validated.set(fingerprint, { outcome, at: Date.now() });
+    }
+    return outcome;
   }
 
   // Per-instance, deliberately. These counters bound creation of the sessions in the map above, so
@@ -371,20 +430,40 @@ export function createMcpHttpApp(
       return;
     }
 
-    const credential = oauthCredential(token);
-    // The cache key is still the credential -- one probe per distinct token, which is what makes a
-    // flood of junk tokens cheap. What the session binds to is the subject that comes back.
-    const fingerprint = credentialFingerprint(credential);
+    // The cache key is the client's token -- one exchange per distinct token, which is what makes
+    // a flood of junk tokens cheap. What the session binds to is the subject that comes back.
+    const fingerprint = credentialFingerprint(oauthCredential(token));
     const sessionId = sessionIdFrom(req);
 
-    const identity = await identify(credential, fingerprint);
-    if (identity === null) {
+    const outcome = await identify(token, fingerprint);
+    if (outcome.status === 'invalid') {
       sendUnauthorized(res, {
         error: 'invalid_token',
-        description: 'The access token was rejected by the Gremlin API',
+        description: 'The access token is expired, revoked, or was not issued for this server',
       });
       return;
     }
+    if (outcome.status === 'forbidden') {
+      sendJson(res, 403, {
+        jsonrpc: '2.0',
+        error: {
+          code: -32003,
+          message:
+            'AI and MCP access is disabled for this organization by an administrator',
+        },
+        id: null,
+      });
+      return;
+    }
+    if (outcome.status === 'unavailable') {
+      sendJson(res, 503, {
+        jsonrpc: '2.0',
+        error: { code: -32002, message: 'Authorization server unavailable; retry shortly' },
+        id: null,
+      });
+      return;
+    }
+    const { identity, credential } = outcome;
 
     if (sessionId) {
       const existing = sessions.get(sessionId);
