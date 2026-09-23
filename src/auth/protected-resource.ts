@@ -13,9 +13,8 @@ export const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
 /**
  * The scopes a client needs to use this server.
  *
- * <p>One today, because a token carries the authorizing user's own rights rather than a narrower
- * subset. `offline_access` is deliberately absent: Claude appends it itself when the authorization
- * server advertises it, and naming it here would ask for a refresh token from organizations whose
+ * `offline_access` is deliberately absent: Claude appends it itself when the authorization server
+ * advertises it, so naming it here would request a refresh token from organizations whose session
  * policy declines them.
  */
 export const REQUIRED_SCOPES = ['gremlin:full'];
@@ -79,10 +78,6 @@ export function buildProtectedResourceMetadata(): ProtectedResourceMetadata {
     bearer_methods_supported: ['header'],
     // Mirrors the authorization server's vocabulary. One functional scope today; a token inherits
     // the authorizing user's own RBAC rather than a narrower subset.
-    // offline_access is not listed. The MCP specification says this field is the minimal set
-    // needed for basic functionality, and Claude appends offline_access itself from the
-    // authorization server's own metadata when that server offers it -- so listing it here would
-    // ask every organization for a refresh token, including those whose policy declines them.
     scopes_supported: REQUIRED_SCOPES,
     resource_documentation: 'https://www.gremlin.com/docs',
   };
@@ -100,11 +95,9 @@ export function buildProtectedResourceMetadata(): ProtectedResourceMetadata {
 export function buildChallenge(error?: 'invalid_token' | 'insufficient_scope', description?: string): string {
   const params = [
     `resource_metadata="${getResourceIdentifier()}${PROTECTED_RESOURCE_PATH}"`,
-    // The MCP specification says a server SHOULD name the scopes it needs here, and Claude reads
-    // this in preference to the metadata document's scopes_supported. Naming them keeps the
-    // consent prompt to what this server actually requires rather than the whole catalogue -- and
-    // it is the entry point to the step-up flow, which is what will make narrower scopes usable
-    // when there is more than one of them.
+    // Claude reads this in preference to the metadata document's scopes_supported, so naming them
+    // keeps the consent prompt to what this server requires. Also the entry point to the step-up
+    // flow (design §B4.2).
     `scope="${REQUIRED_SCOPES.join(' ')}"`,
   ];
   if (error) {
@@ -165,11 +158,9 @@ function escapeQuoted(value: string): string {
 }
 
 /**
- * This server's own OAuth client credentials, used to authenticate at the token endpoint when
- * exchanging a user's token for one it may present to the Gremlin API.
- *
- * <p>Required, with no default. A missing secret would otherwise surface as every tool call
- * failing authorization, which is a long way from the cause.
+ * This server's own OAuth client credentials, for authenticating at the token endpoint during
+ * exchange. Required with no default: a missing secret would otherwise surface as every tool call
+ * failing authorization, a long way from the cause.
  */
 export function getExchangeClientCredentials(): { clientId: string; clientSecret: string } {
   const clientId = process.env.GREMLIN_MCP_OAUTH_CLIENT_ID?.trim();
@@ -185,9 +176,8 @@ export function getExchangeClientCredentials(): { clientId: string; clientSecret
 /**
  * The audience this server asks for when exchanging: the Gremlin API.
  *
- * <p>Distinct from {@link getResourceIdentifier}, and the distinction is the entire point of the
- * exchange. Tokens arrive audienced for this server; the API is a different resource with its own
- * users, keys and lifecycle, so a token for one must not be a token for the other.
+ * Distinct from {@link getResourceIdentifier}, which is the point of the exchange -- tokens arrive
+ * audienced for this server, and the API is a separate resource.
  */
 export function getApiResourceIdentifier(): string {
   const configured = process.env.GREMLIN_API_RESOURCE_URL?.trim();

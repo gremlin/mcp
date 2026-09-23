@@ -227,13 +227,11 @@ export type ServerFactory = (credential: GremlinCredential) => McpServer;
 
 /**
  * Turns a client's access token into a credential this server may use, or explains why it cannot.
+ * Injectable so tests need no network.
  *
- * <p>Injectable so tests need no network.
- *
- * <p>The four outcomes are distinct because Claude reacts to each differently, and collapsing any
- * two of them produces a visibly broken connector: `invalid` must become a 401 so the OAuth flow
- * runs again, `forbidden` a terminal 403, and `unavailable` a 503. A transport failure or a 5xx is
- * not evidence about the token, so it must never be reported as `invalid`.
+ * <p>The outcomes stay distinct because Claude reacts to each differently; see {@link
+ * ExchangeFailure}. A transport failure or a 5xx is not evidence about the token, so it must never
+ * be reported as `invalid`.
  */
 export type CredentialValidator = (accessToken: string) => Promise<ValidationOutcome>;
 
@@ -259,16 +257,13 @@ export interface CredentialIdentity {
 }
 
 /**
- * The real path: exchange the client's token for one of our own, then ask who it belongs to.
+ * Exchanges the client's token for one of our own, then asks who it belongs to.
  *
- * <p>The exchange is the validation. The authorization server refuses to exchange a token that is
- * expired, revoked, or minted for somewhere other than this server, so a successful exchange is
- * proof of all three -- and unlike the call it replaces, it does not require *using* the client's
- * credential to learn anything about it.
+ * <p>The exchange is the validation: the authorization server refuses a token that is expired,
+ * revoked, or minted elsewhere, so success is proof of all three without ever *using* the client's
+ * credential.
  *
- * <p>`getSelf` still runs, but with the exchanged token and only to learn the subject a session
- * binds to. That is our own credential at our own upstream, which is an ordinary API call rather
- * than passthrough.
+ * <p>`getSelf` runs with the *exchanged* token, only to learn the subject a session binds to.
  */
 export function exchangeForApiCredential(exchanger: TokenExchanger): CredentialValidator {
   return async (accessToken) => {
@@ -299,18 +294,16 @@ export function exchangeForApiCredential(exchanger: TokenExchanger): CredentialV
     } catch (error) {
       const status = error instanceof GremlinApiError ? error.statusCode : undefined;
       if (status === 401 || status === 403) {
-        // The exchange succeeded but the derived token was refused. Treat it as a transient
-        // upstream disagreement rather than a verdict on the client's token, which the
-        // authorization server has already accepted.
+        // The exchange succeeded but the derived token was refused -- an upstream disagreement,
+        // not a verdict on the client's token, which the authorization server already accepted.
         exchanger.forget(accessToken);
         return { status: 'unavailable' };
       }
       return {
         status: 'ok',
-        // The API could not tell us who this is -- a transport failure or a 5xx, neither of which
-        // is evidence about the token. Falling back to the credential's own fingerprint keeps the
-        // session bound to something, at the cost of not surviving a token refresh; the
-        // alternative is refusing a user whose connector is working.
+        // The API could not say who this is, which is not evidence about the token. Binding to
+        // the credential's fingerprint costs surviving a refresh, but the alternative is refusing
+        // a user whose connector is working.
         identity: { subject: credentialFingerprint(credential) },
         credential,
       };
@@ -366,8 +359,8 @@ export function createMcpHttpApp(
     }
 
     const outcome = await validateCredential(accessToken);
-    // Only a settled answer is cached. `unavailable` says nothing about the token, so remembering
-    // it would extend an authorization-server blip into a minutes-long outage of our own.
+    // `unavailable` says nothing about the token, so caching it would extend an
+    // authorization-server blip into a longer outage of our own.
     if (outcome.status !== 'unavailable') {
       validated.set(fingerprint, { outcome, at: Date.now() });
     }
@@ -429,8 +422,8 @@ export function createMcpHttpApp(
       return;
     }
 
-    // The cache key is the client's token -- one exchange per distinct token, which is what makes
-    // a flood of junk tokens cheap. What the session binds to is the subject that comes back.
+    // Keyed on the client's token, so a flood of distinct junk tokens costs one exchange each
+    // rather than one per request. The session binds to the subject that comes back.
     const fingerprint = credentialFingerprint(oauthCredential(token));
     const sessionId = sessionIdFrom(req);
 
