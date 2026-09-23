@@ -322,9 +322,12 @@ export function createMcpHttpApp(
   {
     createServerForCredential = createGremlinMcpServer,
     validateCredential,
+    reapCredentialCaches = () => {},
   }: {
     createServerForCredential?: ServerFactory;
     validateCredential: CredentialValidator;
+    /** Swept on the same tick as idle sessions; see {@link TokenExchanger.reapExpired}. */
+    reapCredentialCaches?: () => void;
   },
 ): McpHttpApp {
   const sessions = new Map<string, Session>();
@@ -386,6 +389,7 @@ export function createMcpHttpApp(
   }
 
   function reapIdleSessions(): void {
+    reapCredentialCaches();
     // The validation cache is swept on the same tick, so it cannot grow without bound under a
     // flood of distinct tokens -- which is the very traffic this cache exists to absorb.
     const validationCutoff = Date.now() - VALIDATION_TTL_MS;

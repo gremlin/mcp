@@ -177,6 +177,45 @@ describe('TokenExchanger', () => {
     expect(b).toMatchObject({ ok: true, accessToken: 'api-for-gremlin_oat_b' });
   });
 
+  it('reclaims entries whose tokens have expired', async () => {
+    // A cached entry is only replaced when its own key is asked for again, and a client's token
+    // changes on every refresh -- so without a sweep the map grows by one per rotation per user
+    // and nothing reclaims the old ones.
+    let now = 1_000_000;
+    stubFetch((_url, init) => ({
+      status: 200,
+      body: {
+        access_token: `api-for-${(init.body as URLSearchParams).get('subject_token')}`,
+        expires_in: 300,
+      },
+    }));
+    const exchanger = new TokenExchanger(CONFIG, () => now);
+
+    await exchanger.exchange('gremlin_oat_before_refresh');
+    await exchanger.exchange('gremlin_oat_after_refresh');
+    expect(exchanger.size()).toBe(2);
+
+    now += 301_000;
+    exchanger.reapExpired();
+
+    expect(exchanger.size()).toBe(0);
+  });
+
+  it('keeps entries that are still live when sweeping', async () => {
+    let now = 1_000_000;
+    stubFetch(() => ({
+      status: 200,
+      body: { access_token: 'gremlin_oat_api', expires_in: 300 },
+    }));
+    const exchanger = new TokenExchanger(CONFIG, () => now);
+
+    await exchanger.exchange(SUBJECT);
+    now += 60_000;
+    exchanger.reapExpired();
+
+    expect(exchanger.size()).toBe(1);
+  });
+
   it('forgets a token on request', async () => {
     const fetchMock = stubFetch(() => ({
       status: 200,

@@ -117,6 +117,22 @@ export class TokenExchanger {
     this.cache.delete(this.key(subjectToken));
   }
 
+  /**
+   * Drops entries whose tokens have expired.
+   *
+   * A cached entry is only replaced when its own key is asked for again, and a client's token
+   * changes on every refresh -- so without this the map grows by one entry per rotation per user
+   * and nothing ever reclaims the old ones. Called from the same timer that reaps idle sessions.
+   */
+  reapExpired(): void {
+    const now = this.now();
+    for (const [key, entry] of this.cache) {
+      if (entry.expiresAt <= now) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
   size(): number {
     return this.cache.size;
   }

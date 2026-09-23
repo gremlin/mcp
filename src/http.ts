@@ -37,7 +37,10 @@ const exchanger = new TokenExchanger({
   targetResource: getApiResourceIdentifier(),
 });
 
-const app = createMcpHttpApp({ validateCredential: exchangeForApiCredential(exchanger) });
+const app = createMcpHttpApp({
+  validateCredential: exchangeForApiCredential(exchanger),
+  reapCredentialCaches: () => exchanger.reapExpired(),
+});
 const httpServer = createServer((req, res) => app.handle(req, res));
 
 const reaper = setInterval(() => app.reapIdleSessions(), 60_000);
