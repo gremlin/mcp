@@ -11,6 +11,16 @@ const DEFAULT_AUTHORIZATION_SERVER = 'https://api.gremlin.com';
 export const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
 
 /**
+ * The scopes a client needs to use this server.
+ *
+ * <p>One today, because a token carries the authorizing user's own rights rather than a narrower
+ * subset. `offline_access` is deliberately absent: Claude appends it itself when the authorization
+ * server advertises it, and naming it here would ask for a refresh token from organizations whose
+ * policy declines them.
+ */
+export const REQUIRED_SCOPES = ['gremlin:full'];
+
+/**
  * This server's RFC 9728 resource identifier.
  *
  * <p>Normalised once here -- trailing slash removed -- and never adjusted again downstream, so this
@@ -69,7 +79,11 @@ export function buildProtectedResourceMetadata(): ProtectedResourceMetadata {
     bearer_methods_supported: ['header'],
     // Mirrors the authorization server's vocabulary. One functional scope today; a token inherits
     // the authorizing user's own RBAC rather than a narrower subset.
-    scopes_supported: ['gremlin:full', 'offline_access'],
+    // offline_access is not listed. The MCP specification says this field is the minimal set
+    // needed for basic functionality, and Claude appends offline_access itself from the
+    // authorization server's own metadata when that server offers it -- so listing it here would
+    // ask every organization for a refresh token, including those whose policy declines them.
+    scopes_supported: REQUIRED_SCOPES,
     resource_documentation: 'https://www.gremlin.com/docs',
   };
 }
@@ -84,7 +98,15 @@ export function buildProtectedResourceMetadata(): ProtectedResourceMetadata {
  *     -- there is nothing wrong with the request yet, it is simply unauthenticated.
  */
 export function buildChallenge(error?: 'invalid_token' | 'insufficient_scope', description?: string): string {
-  const params = [`resource_metadata="${getResourceIdentifier()}${PROTECTED_RESOURCE_PATH}"`];
+  const params = [
+    `resource_metadata="${getResourceIdentifier()}${PROTECTED_RESOURCE_PATH}"`,
+    // The MCP specification says a server SHOULD name the scopes it needs here, and Claude reads
+    // this in preference to the metadata document's scopes_supported. Naming them keeps the
+    // consent prompt to what this server actually requires rather than the whole catalogue -- and
+    // it is the entry point to the step-up flow, which is what will make narrower scopes usable
+    // when there is more than one of them.
+    `scope="${REQUIRED_SCOPES.join(' ')}"`,
+  ];
   if (error) {
     params.unshift(`error="${error}"`);
     if (description) {

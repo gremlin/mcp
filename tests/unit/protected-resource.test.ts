@@ -53,9 +53,12 @@ describe('protected resource metadata', () => {
     expect(buildProtectedResourceMetadata().bearer_methods_supported).toEqual(['header']);
   });
 
-  it('advertises the authorization server scope vocabulary', () => {
-    expect(buildProtectedResourceMetadata().scopes_supported).toContain('gremlin:full');
-    expect(buildProtectedResourceMetadata().scopes_supported).toContain('offline_access');
+  it('advertises only the scopes this server actually needs', () => {
+    // The MCP specification calls this the minimal set for basic functionality. offline_access is
+    // deliberately absent: Claude appends it itself from the authorization server's metadata when
+    // that server offers it, so listing it here would request a refresh token from organizations
+    // whose session policy declines them.
+    expect(buildProtectedResourceMetadata().scopes_supported).toEqual(['gremlin:full']);
   });
 
   it('carries no credential material', () => {
@@ -80,8 +83,15 @@ describe('buildChallenge', () => {
     // RFC 9728 section 5.1. Without this parameter a 401 leaves the client with nowhere to go, and
     // the connection fails with no diagnostics.
     expect(buildChallenge()).toBe(
-      `Bearer resource_metadata="${RESOURCE}${PROTECTED_RESOURCE_PATH}"`,
+      `Bearer resource_metadata="${RESOURCE}${PROTECTED_RESOURCE_PATH}", scope="gremlin:full"`,
     );
+  });
+
+  it('names the scopes it needs, so the consent prompt is not the whole catalogue', () => {
+    // Claude reads this in preference to the metadata document, and it is the entry point to the
+    // step-up flow that makes narrow scopes usable once there is more than one of them.
+    expect(buildChallenge()).toContain('scope="gremlin:full"');
+    expect(buildChallenge('invalid_token', 'expired')).toContain('scope="gremlin:full"');
   });
 
   it('reports invalid_token so a client knows to refresh rather than re-consent', () => {
