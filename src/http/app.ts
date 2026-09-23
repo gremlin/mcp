@@ -253,14 +253,9 @@ export type ValidationOutcome =
  * needs a credential resolving to the same user -- and it now survives rotation, which is the
  * whole point of having refresh tokens.
  *
- * <p>`unknown` marks the case where the API could not tell us: a transport failure or a 5xx, which
- * is not evidence about the token. Those are allowed through rather than locking users out of a
- * working connector during an API blip, but they cannot be bound to a subject, so they fall back to
- * the credential itself.
  */
 export interface CredentialIdentity {
   subject: string;
-  unknown?: boolean;
 }
 
 /**
@@ -312,7 +307,11 @@ export function exchangeForApiCredential(exchanger: TokenExchanger): CredentialV
       }
       return {
         status: 'ok',
-        identity: { subject: credentialFingerprint(credential), unknown: true },
+        // The API could not tell us who this is -- a transport failure or a 5xx, neither of which
+        // is evidence about the token. Falling back to the credential's own fingerprint keeps the
+        // session bound to something, at the cost of not surviving a token refresh; the
+        // alternative is refusing a user whose connector is working.
+        identity: { subject: credentialFingerprint(credential) },
         credential,
       };
     }
