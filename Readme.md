@@ -18,7 +18,9 @@ This MCP server provides access to Gremlin's reliability testing and management 
 
 ### Prerequisites
 - Node.js 18 or higher
-- A valid [Gremlin API key](https://app.gremlin.com/settings/api-keys)
+- For the stdio server: a valid [Gremlin API key](https://app.gremlin.com/settings/api-keys)
+- For the hosted server: an OAuth client registered with the authorization server, see
+  [Deploying the hosted server](#deploying-the-hosted-server)
 
 ### Two deployments
 
@@ -38,16 +40,74 @@ because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` 
 
 ### Environment Variables
 
+Grouped by which entrypoint reads them. Nothing in the stdio column is read by the hosted
+server, and nothing in the hosted column is read by the stdio server.
+
+**Both**
+
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `GREMLIN_API_KEY` | stdio only | — | Your Gremlin API key. The server exits immediately if this is missing. Not read by the hosted server. |
 | `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
-| `GREMLIN_MCP_RESOURCE_URL` | HTTP only | — | This server's own public origin — `https://mcp.gremlin.com` in production, host-only with no path. Its RFC 8707 resource identifier, compared as an exact string, so it must match the `resource` a client sends and what the authorization server audiences tokens for. No default: a wrong guess surfaces as an authentication failure with no obvious cause, so the server refuses to start without it. |
+
+**stdio — API key** (`build/main.mjs`)
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `GREMLIN_API_KEY` | **Yes** | — | Your Gremlin API key. The server exits immediately if this is missing. Not read by the hosted server. |
+
+**Hosted — OAuth** (`build/http.mjs`)
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `GREMLIN_MCP_RESOURCE_URL` | **Yes** | — | This server's own public origin — `https://mcp.gremlin.com` in production, host-only with no path. Its RFC 8707 resource identifier, compared as an exact string, so it must match the `resource` a client sends and what the authorization server audiences tokens for. No default: a wrong guess surfaces as an authentication failure with no obvious cause, so the server refuses to start without it. |
+| `GREMLIN_MCP_OAUTH_CLIENT_ID` | **Yes** | — | This server's own OAuth client id, for authenticating at the token endpoint during exchange. Issued by registering the server as a client with the authorization server; see [Deploying the hosted server](#deploying-the-hosted-server). |
+| `GREMLIN_MCP_OAUTH_CLIENT_SECRET` | **Yes** | — | The matching secret. Belongs in a secret store, not in a manifest. Printed once at registration and not recoverable afterwards. |
+| `GREMLIN_API_RESOURCE_URL` | No | value of `GREMLIN_AUTHORIZATION_SERVER` | The audience this server asks for when exchanging — the Gremlin API. Distinct from `GREMLIN_MCP_RESOURCE_URL`, which is this server: tokens arrive audienced for this server and are exchanged for one audienced at the API. |
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
 | `PORT` | No | `8080` | HTTP listen port. |
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
-| `GREMLIN_MCP_ALLOWED_ORIGINS` | No | *(none)* | Comma-separated browser origins permitted to call `/mcp`. Requests with no `Origin` are allowed — the legitimate caller is a server, not a browser — and any present value must be listed. Only needed for local development against a browser-based MCP client. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. Source is the rightmost globally-routable `X-Forwarded-For` hop, so a private load-balancer hop does not collapse every caller into one bucket. |
+| `GREMLIN_MCP_ALLOWED_ORIGINS` | No | *(none)* | Comma-separated browser origins permitted to call `/mcp`. Requests with no `Origin` are allowed — the legitimate caller is a server, not a browser — and any present value must be listed. Only needed for local development against a browser-based MCP client. |
+
+### Deploying the hosted server
+
+The hosted server authenticates as itself to exchange a user's token (RFC 8693), so it needs
+an OAuth client identity of its own. That identity is issued by the authorization server, not
+configured here, which makes registration a prerequisite rather than a setting.
+
+1. **Register this server as a client** with the authorization server. Against a Gremlin
+   `service` deployment that is a migration, run by whoever operates it:
+
+   ```bash
+   MIGRATION_CLASS=com.gremlininc.oauth.RegisterOAuthExchangeClientMigration \
+   MIGRATION_RUN_ARGS="Gremlin MCP Server https://mcp.gremlin.com https://api.gremlin.com" \
+   make migration_up
+   ```
+
+   The arguments are the display name, the audience an incoming token must carry (this
+   server), and the audiences it may request (the API). The client id and secret are printed
+   **once**; only a hash is stored, so a lost secret means re-registering.
+
+2. **Set the environment** from the hosted table above. `GREMLIN_MCP_OAUTH_CLIENT_ID` and
+   `GREMLIN_MCP_OAUTH_CLIENT_SECRET` are the values from step 1.
+
+3. **Check the identifiers agree with the authorization server.** They are compared as exact
+   strings, per RFC 8707 — a trailing slash or a scheme difference is a mismatch, and it
+   surfaces as an authorization failure a long way from its cause.
+
+   | Here | Must equal, on the authorization server |
+   | --- | --- |
+   | `GREMLIN_MCP_RESOURCE_URL` | an entry in its `GREMLIN_OAUTH_RESOURCES` |
+   | `GREMLIN_API_RESOURCE_URL` | its `GREMLIN_API_URL` |
+   | `GREMLIN_AUTHORIZATION_SERVER` | the origin serving `/.well-known/oauth-authorization-server` |
+
+4. **Serve this origin over TLS**, and leave
+   `/.well-known/oauth-protected-resource` reachable unauthenticated. Clients read it before
+   they hold any credential, so a WAF rule or auth proxy in front of it breaks discovery.
+
+Running against your own Gremlin deployment rather than Gremlin's? Steps 1 and 3 are the parts
+that need coordinating with whoever operates that authorization server; everything else is
+local to this repo.
 
 ### Why the resource identifier is the MCP server, not the API
 
