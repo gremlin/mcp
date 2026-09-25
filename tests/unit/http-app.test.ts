@@ -85,6 +85,20 @@ function mcpRequest(
   return fetch(`${origin}/mcp`, { method: 'POST', headers, body: JSON.stringify(body) });
 }
 
+/** An MCP initialize arriving from `address`, as the load balancer in front of us reports it. */
+function fromSource(origin: string, address: string, token: string) {
+  return fetch(`${origin}/mcp`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      Authorization: `Bearer ${token}`,
+      'X-Forwarded-For': address,
+    },
+    body: JSON.stringify(INITIALIZE),
+  });
+}
+
 describe('MCP HTTP app', () => {
   const saved = { ...process.env };
   let harness: Awaited<ReturnType<typeof startApp>> | undefined;
@@ -359,6 +373,75 @@ describe('MCP HTTP app', () => {
 
       // Each caller has its own budget, so none is refused for another's traffic.
       expect(statuses.filter((s) => s === 429).length).toBe(0);
+    });
+
+    it('caps upstream validations per source before they reach the authorization server', async () => {
+      // A flood of distinct junk tokens used to cost one token exchange each, all under this
+      // server's one client identity -- so one caller could spend the budget every user's exchanges
+      // share. A source over its bound is refused here and the validator is never called.
+      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '5';
+      const validate = vi.fn<CredentialValidator>(async () => ({ status: 'invalid' }));
+      harness = await startApp(undefined, validate);
+      const statuses: number[] = [];
+
+      for (let i = 0; i < 12; i++) {
+        const response = await fromSource(harness.origin, '203.0.113.50', `gremlin_oat_junk_${i}`);
+        statuses.push(response.status);
+      }
+
+      expect(validate).toHaveBeenCalledTimes(5);
+      expect(statuses.slice(0, 5).every((s) => s === 401)).toBe(true);
+      expect(statuses.slice(5).every((s) => s === 429)).toBe(true);
+    });
+
+    it("keeps one source's flood from throttling another source", async () => {
+      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '3';
+      // Junk is rejected; the bystander's real token is accepted.
+      harness = await startApp(undefined, async (token) =>
+        token === TOKEN_B ? ok('bystander') : { status: 'invalid' },
+      );
+
+      for (let i = 0; i < 10; i++) {
+        await fromSource(harness.origin, '203.0.113.50', `gremlin_oat_junk_${i}`);
+      }
+      const bystander = await fromSource(harness.origin, '203.0.113.51', TOKEN_B);
+
+      expect(bystander.status).toBe(200);
+    });
+
+    it('never throttles a credential it has already validated', async () => {
+      // Only a cache miss goes upstream, so only a miss is counted: a known user keeps working
+      // even while its own source is over the bound.
+      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '2';
+      harness = await startApp();
+
+      expect((await fromSource(harness.origin, '203.0.113.60', TOKEN_A)).status).toBe(200);
+      await fromSource(harness.origin, '203.0.113.60', 'gremlin_oat_other_1');
+      expect((await fromSource(harness.origin, '203.0.113.60', 'gremlin_oat_other_2')).status).toBe(
+        429,
+      );
+      expect((await fromSource(harness.origin, '203.0.113.60', TOKEN_A)).status).toBe(200);
+    });
+
+    it('gives a configured trusted source a larger allowance for both bounds', async () => {
+      // An LLM vendor's users all arrive from a few addresses; the ordinary bound would make them
+      // throttle each other. A trusted range gets its own raised bound instead.
+      process.env.GREMLIN_MCP_TRUSTED_SOURCE_CIDRS = '198.51.100.0/24';
+      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '2';
+      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED = '30';
+      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE = '2';
+      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED = '30';
+      harness = await startApp();
+      const vendor: number[] = [];
+      const other: number[] = [];
+
+      for (let i = 0; i < 10; i++) {
+        vendor.push((await fromSource(harness.origin, '198.51.100.9', `gremlin_oat_v_${i}`)).status);
+        other.push((await fromSource(harness.origin, '203.0.113.70', `gremlin_oat_o_${i}`)).status);
+      }
+
+      expect(vendor.every((s) => s === 200)).toBe(true);
+      expect(other.slice(2).every((s) => s === 429)).toBe(true);
     });
 
     it('does not count requests that reuse an established session', async () => {

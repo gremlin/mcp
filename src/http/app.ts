@@ -18,6 +18,7 @@ import {
 } from '../auth/protected-resource';
 import { GremlinApi, GremlinApiError } from '../client/gremlin';
 import { createGremlinMcpServer } from '../server';
+import { positiveOr, SourceRateLimiter, trustedSourcesFrom } from './source-limits';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -69,16 +70,40 @@ const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_SESSIONS = Number(process.env.GREMLIN_MCP_MAX_SESSIONS ?? 2000);
 
 /**
- * Per-source cap on session creation.
+ * Per-source cap on session creation, `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE`.
  *
- * <p>Session setup is the expensive path here, and it happens before the API has validated
- * anything, so the only identity available is the caller's address. Reusing an established session
- * is deliberately not counted: a legitimate client makes many requests against one session and
- * should never be throttled for it.
+ * <p>Session setup is the expensive path here. Reusing an established session is deliberately not
+ * counted: a legitimate client makes many requests against one session and should never be
+ * throttled for it.
  */
-const MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE = Number(
-  process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE ?? 20,
-);
+const DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE = 20;
+
+/**
+ * The same cap for a trusted source, `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED` -- sized for
+ * an LLM vendor's whole user base arriving from a handful of addresses.
+ */
+const DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_TRUSTED_SOURCE = 1000;
+
+/**
+ * Per-source cap on credential validations that go upstream, `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE`.
+ *
+ * <p>Only a cache miss counts: a credential already validated inside the TTL, and every request on
+ * an established session, never touch it. What it bounds is the flood of distinct junk tokens, each
+ * of which would otherwise cost a token exchange -- and a client-secret verification -- at the
+ * authorization server. Those exchanges all leave from this server under one client identity, so
+ * without a bound here one caller could spend the budget every user's exchanges share there.
+ *
+ * <p>Generous for one caller: a person's client presents one token, revalidated about once a minute
+ * at most.
+ */
+const DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_SOURCE = 60;
+
+/**
+ * The same cap for a trusted source, `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED`. Below the
+ * authorization server's per-client bound, so no single source -- trusted or not -- can spend all
+ * of it.
+ */
+const DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_TRUSTED_SOURCE = 3000;
 
 const RATE_WINDOW_MS = 60 * 1000;
 
@@ -339,6 +364,34 @@ export function createMcpHttpApp(
    */
   const validated = new Map<string, { outcome: ValidationOutcome; at: number }>();
 
+  // Read when the app is built rather than at import, so each app -- and each test -- gets the
+  // configuration in force when it was created.
+  const trustedSources = trustedSourcesFrom(process.env.GREMLIN_MCP_TRUSTED_SOURCE_CIDRS);
+  const validationLimiter = new SourceRateLimiter(
+    RATE_WINDOW_MS,
+    positiveOr(
+      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE,
+      DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_SOURCE,
+    ),
+    positiveOr(
+      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED,
+      DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_TRUSTED_SOURCE,
+    ),
+    trustedSources,
+  );
+  const newSessionLimiter = new SourceRateLimiter(
+    RATE_WINDOW_MS,
+    positiveOr(
+      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE,
+      DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE,
+    ),
+    positiveOr(
+      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED,
+      DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_TRUSTED_SOURCE,
+    ),
+    trustedSources,
+  );
+
   /**
    * Confirms the credential is real before anything is allocated for it.
    *
@@ -355,10 +408,19 @@ export function createMcpHttpApp(
    *
    * <p>See {@link CredentialValidator} for why only a definite rejection counts as a failure.
    */
-  async function identify(accessToken: string, fingerprint: string): Promise<ValidationOutcome> {
+  async function identify(
+    accessToken: string,
+    fingerprint: string,
+    source: string,
+  ): Promise<ValidationOutcome | { status: 'throttled' }> {
     const cached = validated.get(fingerprint);
     if (cached && Date.now() - cached.at < VALIDATION_TTL_MS) {
       return cached.outcome;
+    }
+    // Only a miss goes upstream, so only a miss is counted -- and it is counted before the call, so
+    // a source over its bound costs the authorization server nothing.
+    if (validationLimiter.exceeded(source, Date.now())) {
+      return { status: 'throttled' };
     }
 
     const outcome = await validateCredential(accessToken);
@@ -368,24 +430,6 @@ export function createMcpHttpApp(
       validated.set(fingerprint, { outcome, at: Date.now() });
     }
     return outcome;
-  }
-
-  // Per-instance, deliberately. These counters bound creation of the sessions in the map above, so
-  // they belong to the same lifetime: at module scope one app's traffic would throttle another's,
-  // and closing an app would leave its counters behind.
-  let windowStartedAt = 0;
-  let newSessionsThisWindow = new Map<string, number>();
-
-  /** True when this source has already opened its allowance of sessions in the current window. */
-  function newSessionRateExceeded(source: string, now: number): boolean {
-    if (now - windowStartedAt >= RATE_WINDOW_MS) {
-      windowStartedAt = now;
-      newSessionsThisWindow = new Map();
-    }
-    const used = newSessionsThisWindow.get(source) ?? 0;
-    if (used >= MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE) return true;
-    newSessionsThisWindow.set(source, used + 1);
-    return false;
   }
 
   function reapIdleSessions(): void {
@@ -430,8 +474,22 @@ export function createMcpHttpApp(
     // rather than one per request. The session binds to the subject that comes back.
     const fingerprint = credentialFingerprint(oauthCredential(token));
     const sessionId = sessionIdFrom(req);
+    const source = sourceKey(req);
 
-    const outcome = await identify(token, fingerprint);
+    const outcome = await identify(token, fingerprint, source);
+    if (outcome.status === 'throttled') {
+      sendJson(
+        res,
+        429,
+        {
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Too many new credentials from this source, retry shortly' },
+          id: null,
+        },
+        { 'Retry-After': '60' },
+      );
+      return;
+    }
     if (outcome.status === 'invalid') {
       sendUnauthorized(res, {
         error: 'invalid_token',
@@ -491,8 +549,7 @@ export function createMcpHttpApp(
 
     // No session id: a fresh initialize, which is the expensive path. Both bounds below run before
     // anything is allocated.
-    const source = sourceKey(req);
-    if (newSessionRateExceeded(source, Date.now())) {
+    if (newSessionLimiter.exceeded(source, Date.now())) {
       sendJson(
         res,
         429,
