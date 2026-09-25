@@ -116,33 +116,31 @@ local to this repo.
 ### Why the resource identifier is the MCP server, not the API
 
 `GREMLIN_MCP_RESOURCE_URL` is this server's own origin, and the access tokens Claude obtains are
-audienced for it. Conceptually that is a little off: the credential authorizes *this server* to
-reach `api.gremlin.com` on the user's behalf, and the API is what actually validates the token and
-applies the user's RBAC. By that reading the audience "should" be `https://api.gremlin.com`.
+audienced for it (RFC 8707). That is required rather than chosen: Anthropic's connector
+requirements state that the protected resource metadata document's `resource` field must match the
+MCP server URL exactly as the user enters it in Claude, and Claude requests tokens for whatever that
+field says.
 
-It is not, for a concrete reason: Anthropic's connector requirements state that *the protected
-resource metadata document's `resource` field must match your MCP server URL exactly as the user
-enters it in Claude*. Declaring the API there would fail directory review, and Claude sends back
-whatever that field says regardless.
+Those tokens are never forwarded. `api.gremlin.com` refuses a token audienced for
+`mcp.gremlin.com` -- it accepts only its own identifier, or a token with no audience at all -- so a
+token minted for this server is useless if replayed directly at the API. Instead, on each request
+this server:
 
-The consequence is that `api.gremlin.com` must accept tokens audienced for `mcp.gremlin.com`, so
-its allow list (`GREMLIN_OAUTH_RESOURCES` on the service side) contains both hosts and the audience
-check cannot distinguish between them. That was accepted deliberately rather than overlooked:
+1. exchanges the user's token at the authorization server (RFC 8693), authenticating as itself
+   with `GREMLIN_MCP_OAUTH_CLIENT_ID` and `GREMLIN_MCP_OAUTH_CLIENT_SECRET`;
+2. receives a separate, short-lived token audienced for `GREMLIN_API_RESOURCE_URL`, carrying the
+   same user and scopes and recorded against the same grant, so revoking the grant ends both;
+3. calls the API with that exchanged token only. The token Claude sent is never placed in an
+   `Authorization` header to anything upstream.
 
-- The attack audience binding exists to stop — a token minted for resource A being replayed at
-  resource B — yields no privilege gain here, because the API applies the authorizing user's own
-  RBAC either way. An attacker holding the token can call the API directly instead, for the same
-  access.
-- The upstream path is closed separately: we support no Dynamic Client Registration, and
-  `redirect_uri` is an exact-match allow list, so a third-party resource cannot obtain a token from
-  our authorization server in the first place.
+The authorization server refuses an exchange unless the subject token's audience is this server's
+registered resource, so a token minted for anything else cannot be walked through here into an API
+credential. A successful exchange is also the validation: an expired, revoked or wrongly audienced
+token fails it and is answered with a `401` challenge.
 
-**Revisit this if the topology changes.** Specifically: a second protected resource (another
-connector, a partner-operated MCP server), or this server leaving the API team's operational
-control. At that point the audience field stops being cosmetic, and the fix is RFC 8693 token
-exchange at this boundary — this server would validate its own `aud=mcp` token and exchange it for
-an `aud=api` one rather than forwarding. That needs an introspection endpoint or shared token-store
-access, plus a client credential for this server, which is why it was not worth paying up front.
+`GREMLIN_OAUTH_RESOURCES` on the service side lists both hosts, and that is correct: it is the set of
+audiences the authorization server will *issue* tokens for, not the set the API will *accept*. The
+API accepts only its own.
 
 ### Hosted server endpoints
 
