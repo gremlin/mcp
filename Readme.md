@@ -67,6 +67,10 @@ server, and nothing in the hosted column is read by the stdio server.
 | `PORT` | No | `8080` | HTTP listen port. |
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. Source is the rightmost globally-routable `X-Forwarded-For` hop, so a private load-balancer hop does not collapse every caller into one bucket. |
+| `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED` | No | `1000` | The same cap for a source in `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS`. |
+| `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE` | No | `60` | Per-source cap on credential validations that go to the authorization server; excess gets `429` before any upstream call. Only a cache miss counts: a credential validated in the last minute, and every request on an established session, never do. |
+| `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED` | No | `3000` | The same cap for a trusted source. Kept below the authorization server's per-client bound, so no single source can spend all of it. |
+| `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS` | No | *(none)* | Comma-separated CIDR ranges or addresses whose traffic is many users rather than one caller — an LLM vendor's egress, such as Anthropic's `160.79.104.0/21` for Claude's hosted surfaces. They get the `_TRUSTED` bounds. Unset trusts nothing; an entry that does not parse is skipped, so a typo fails closed. |
 | `GREMLIN_MCP_ALLOWED_ORIGINS` | No | *(none)* | Comma-separated browser origins permitted to call `/mcp`. Requests with no `Origin` are allowed — the legitimate caller is a server, not a browser — and any present value must be listed. Only needed for local development against a browser-based MCP client. |
 
 ### Deploying the hosted server
@@ -159,7 +163,16 @@ attaching to a session requires presenting that same token — a leaked session 
 Two bounds sit in front of session creation, because a session is allocated on the first request
 rather than on demand: `GREMLIN_MCP_MAX_SESSIONS` (default 2000) caps how many can exist, and
 `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` (default 20) caps how fast one source can open them.
-Reusing an established session is not counted against the second. A bearer that is not one of our
+Reusing an established session is not counted against the second.
+
+Before either, `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE` (default 60) caps how many unknown
+credentials one source can have validated. Each is a token exchange at the authorization server,
+and every exchange leaves this server under the same client identity, so without it one caller
+sending distinct junk tokens could spend the budget all users' exchanges share there. The bounds
+are per source, so one caller's traffic does not throttle another's. A source listed in
+`GREMLIN_MCP_TRUSTED_SOURCE_CIDRS` — an LLM vendor whose whole user base arrives from a few
+addresses — gets raised `_TRUSTED` bounds instead of the ordinary ones. None of this stops a flood
+spread across many addresses; that needs protection in front of the application. A bearer that is not one of our
 `gremlin_oat_` access tokens is refused before anything is allocated — notably including an
 internal Gremlin session token, which the API would otherwise accept under the same Bearer
 scheme.
