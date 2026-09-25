@@ -5,6 +5,7 @@ import { assertRequiredParams, GremlinApi, Self, Service, wrapGremlinError } fro
 export function createGetServiceDependenciesTool(api: GremlinApi) {
     return {
         name: "get_service_dependencies",
+        title: "Get Service Dependencies",
         description: "Retrieves the service dependencies for a specific service.",
         annotations: { readOnlyHint: true },
         schema: {
@@ -31,6 +32,7 @@ export function createGetServiceDependenciesTool(api: GremlinApi) {
 export function createListServiceRisksTool(api: GremlinApi) {
     return {
         name: "list_service_risks",
+        title: "List Service Risks",
         description: "Lists the risks associated with a specific service.",
         annotations: { readOnlyHint: true },
         schema: {
@@ -56,6 +58,7 @@ export function createListServiceRisksTool(api: GremlinApi) {
 export function createGetServiceStatusChecksTool(api: GremlinApi) {
     return {
         name: "get_service_status_checks",
+        title: "Get Service Status Checks",
         description: "Retrieves the status checks for a specific service.",
         annotations: { readOnlyHint: true },
         schema: {
@@ -81,6 +84,7 @@ export function createGetServiceStatusChecksTool(api: GremlinApi) {
 export function createListServicesTool(api: GremlinApi) {
   return {
     name: "list_services",
+    title: "List Services",
     description: "Lists available reliability management services (RM Services for short). Returns service names, descriptions, score, and targeting information.",
     annotations: { readOnlyHint: true },
     schema: {},

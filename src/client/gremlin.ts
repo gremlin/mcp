@@ -1,5 +1,6 @@
 import TTLCache from '@isaacs/ttlcache';
 import { getServiceUrl } from '../config';
+import { authorizationHeader, type GremlinCredential } from '../auth/credential';
 
 
 export interface Team {
@@ -310,7 +311,24 @@ function buildHttpError(status: number, body: string): GremlinApiError {
 export class GremlinApi {
   private baseUrl: string = getServiceUrl();
   private userAgent = "@gremlin/gremlin-mcp/2.4.2";
+
+  /**
+   * Response cache, keyed on URL alone.
+   *
+   * That key is only safe because this cache is per-instance and an instance belongs to exactly
+   * one credential -- see the constructor. A process-wide GremlinApi would serve one user's teams,
+   * services and reports to the next user who asked for the same URL, for the full ten minutes,
+   * and every response would look perfectly valid.
+   */
   private cache = new TTLCache<string, unknown>();
+
+  /**
+   * @param credential whose access this instance acts with. Required, and deliberately so: in the
+   *     hosted server there is no correct process-wide default, and a parameter that can be
+   *     omitted is one that will be. The locally-run server passes
+   *     {@link apiKeyCredentialFromEnvironment} explicitly.
+   */
+  constructor(private readonly credential: GremlinCredential) {}
 
   async listUsers(): Promise<User[]> {
     return this.jsonRequestWithRetry<User[]>('users', {
@@ -568,7 +586,7 @@ export class GremlinApi {
   }
 
   /**
-   * Runs an arbitrary Gremlin API endpoint (backs execute_gremlin_api). Unlike
+   * Runs an arbitrary Gremlin API endpoint (backs the read/create/update/delete tools). Unlike
    * every typed method above — which can assume a JSON response — an arbitrary
    * call may return a non-JSON body (e.g. a bare-text UUID from a POST that
    * creates a resource), so this inspects content-type before deciding whether
@@ -636,7 +654,7 @@ export class GremlinApi {
         ...fetchOptions,
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Key ${process.env.GREMLIN_API_KEY}`,
+            'Authorization': await authorizationHeader(this.credential),
             'User-Agent': this.userAgent,
             ...fetchOptions.headers,
         },
