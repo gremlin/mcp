@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 // pre-commit check: the 4 hardcoded version locations must all agree with
 // package.json. Catches a partial/manual version edit before it's committed.
+//
+// Keep this list in step with scripts/bump-version.mjs — if a version string moves file, both
+// have to follow it, or bump writes one place and this checks another.
 import { readFileSync } from "fs";
 
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const version = pkg.version;
 
 const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
-const mainTs = readFileSync("src/main.ts", "utf8");
+const serverTs = readFileSync("src/server.ts", "utf8");
 const gremlinTs = readFileSync("src/client/gremlin.ts", "utf8");
 
 const checks = [
   ["package-lock.json (root \"version\")", lock.version],
   ['package-lock.json (packages[""].version)', lock.packages?.[""]?.version],
-  ["src/main.ts", mainTs.match(/version:\s*"([\d.]+)"/)?.[1]],
+  ["src/server.ts", serverTs.match(/SERVER_VERSION\s*=\s*['"]([\d.]+)['"]/)?.[1]],
   ["src/client/gremlin.ts", gremlinTs.match(/@gremlin\/gremlin-mcp\/([\d.]+)/)?.[1]],
 ];
 
