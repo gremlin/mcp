@@ -5,8 +5,10 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 
 import {
   credentialFingerprint,
+  credentialSlot,
   delegatedCredential,
   oauthCredential,
+  type CredentialSlot,
   type GremlinCredential,
 } from '../auth/credential';
 import { TokenExchanger } from '../auth/token-exchange';
@@ -29,11 +31,11 @@ const SESSION_HEADER = 'mcp-session-id';
 /**
  * One authenticated user's live MCP session.
  *
- * <p>`fingerprint` is what makes the session belong to somebody. A session id alone is a bearer
+ * <p>`subject` is what makes the session belong to somebody. A session id alone is a bearer
  * credential of its own: anyone who learns one could otherwise attach to that session and act as
  * its owner, because the server would have no reason to look at the token again after the first
- * request. Binding the session to the credential that created it means a stolen session id is
- * useless without the token that opened it.
+ * request. Binding the session to the user behind the credential means a stolen session id is
+ * useless without a credential that resolves to that same user.
  */
 interface Session {
   transport: StreamableHTTPServerTransport;
@@ -46,6 +48,16 @@ interface Session {
    * looked exactly like a different caller.
    */
   subject: string;
+  /**
+   * The credential the session's server authenticates with, scoped to each request it serves.
+   *
+   * <p>The subject above says who may use this session; this says with whose authority it acts.
+   * They are decided at the same point and must not drift: the server is built once, so without
+   * the slot it would keep exercising the token that opened the session long after the caller
+   * stopped presenting it. Scoped rather than stored, so two requests overlapping mid-rotation
+   * each resolve their own. See {@link CredentialSlot}.
+   */
+  credential: CredentialSlot;
   lastSeen: number;
 }
 
@@ -542,8 +554,18 @@ export function createMcpHttpApp(
         });
         return;
       }
+      // Same user, so this credential may drive this session -- and from here on it is the one it
+      // drives it with. The check above decides *whether* the caller may proceed; this decides
+      // with *whose* authority, and the two have to be the same credential or the session ends up
+      // authenticating against the current token while acting on an earlier one. A narrowed
+      // reissue takes effect from this request, and the session no longer depends on a token the
+      // caller has already rotated away from.
       existing.lastSeen = Date.now();
-      await existing.transport.handleRequest(req, res);
+      // Served with the credential this request authenticated with -- scoped to the call, so a
+      // concurrent request mid-rotation cannot lend this one its authority or borrow this one's.
+      await existing.credential.during(credential, () =>
+        existing.transport.handleRequest(req, res),
+      );
       return;
     }
 
@@ -579,12 +601,23 @@ export function createMcpHttpApp(
       return;
     }
 
-    // Build a server and API client bound to this credential alone -- see createGremlinMcpServer
-    // for why sharing either across users cannot be done safely.
+    // Build a server and API client bound to this user alone -- see createGremlinMcpServer for why
+    // sharing either across users cannot be done safely.
+    //
+    // Bound through a slot rather than to this credential directly: the server outlives the token
+    // that opened the session, and the attach path above replaces what the slot holds each time
+    // the caller reauthenticates.
+    const slot = credentialSlot(credential);
+
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id: string) => {
-        sessions.set(id, { transport, subject: identity.subject, lastSeen: Date.now() });
+        sessions.set(id, {
+          transport,
+          subject: identity.subject,
+          credential: slot,
+          lastSeen: Date.now(),
+        });
       },
       onsessionclosed: (id: string) => {
         sessions.delete(id);
@@ -595,9 +628,9 @@ export function createMcpHttpApp(
       if (transport.sessionId) sessions.delete(transport.sessionId);
     };
 
-    const server = createServerForCredential(credential);
+    const server = createServerForCredential(slot.credential);
     await server.connect(transport);
-    await transport.handleRequest(req, res);
+    await slot.during(credential, () => transport.handleRequest(req, res));
   }
 
   function handle(req: IncomingMessage, res: ServerResponse): void {

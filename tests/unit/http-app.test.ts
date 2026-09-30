@@ -11,8 +11,15 @@ import {
 } from '../../src/http/app';
 import { PROTECTED_RESOURCE_PATH } from '../../src/auth/protected-resource';
 
-import { credentialFingerprint, oauthCredential } from '../../src/auth/credential';
+import {
+  authorizationHeader,
+  credentialFingerprint,
+  delegatedCredential,
+  oauthCredential,
+} from '../../src/auth/credential';
 import type { GremlinCredential } from '../../src/auth/credential';
+import { createGremlinMcpServer } from '../../src/server';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const RESOURCE = 'https://mcp.gremlin.com';
 const TOKEN_A = 'gremlin_oat_user_a';
@@ -32,14 +39,16 @@ const INITIALIZE = {
 /**
  * A successful validation, in the shape the app expects.
  *
- * The credential handed back is an ordinary oauth one rather than a delegated one: these tests are
- * about session isolation and lifecycle, and no request reaches the Gremlin API.
+ * The credential is delegated, as the real validator's always is: it is the only kind a session
+ * accepts, because the token that goes upstream is always an exchanged one (design invariant 13).
+ * `resolve` returns a stand-in for the exchanged token rather than calling an authorization
+ * server -- no request in these tests reaches either upstream.
  */
 function ok(subject: string): ValidationOutcome {
   return {
     status: 'ok',
     identity: { subject },
-    credential: oauthCredential(`token-for-${subject}`),
+    credential: delegatedCredential(`client-token-for-${subject}`, async () => `exchanged-for-${subject}`),
   };
 }
 
@@ -98,6 +107,40 @@ function fromSource(origin: string, address: string, token: string) {
     body: JSON.stringify(INITIALIZE),
   });
 }
+
+
+/**
+ * A server whose one tool reports the `Authorization` header its credential actually resolves to.
+ *
+ * <p>Yields a few times first, the way a real tool does while its upstream call is in flight --
+ * which is exactly the window in which another request on the same session can arrive.
+ */
+function credentialReportingServer(credential: GremlinCredential): McpServer {
+  const server = new McpServer({ name: 'probe', version: '1' });
+  server.registerTool(
+    'whoami',
+    { title: 'whoami', description: 'Reports the resolved credential', inputSchema: {} },
+    async () => {
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      return { content: [{ type: 'text' as const, text: await authorizationHeader(credential) }] };
+    },
+  );
+  return server;
+}
+
+/** The JSON-RPC payload of a response, which the SDK may send as JSON or as a single SSE event. */
+async function rpcBody(response: Response): Promise<any> {
+  const text = await response.text();
+  const event = text.split('\n').find((line) => line.startsWith('data:'));
+  return JSON.parse(event ? event.slice(5).trim() : text);
+}
+
+const callWhoami = (id: number) => ({
+  jsonrpc: '2.0' as const,
+  id,
+  method: 'tools/call',
+  params: { name: 'whoami', arguments: {} },
+});
 
 describe('MCP HTTP app', () => {
   const saved = { ...process.env };
@@ -201,13 +244,50 @@ describe('MCP HTTP app', () => {
 
       expect(factory).toHaveBeenCalledTimes(2);
       // Two distinct credentials, which is the property that keeps one user's cached responses
-      // away from another. The exact values come from the stub validator.
-      expect(credentials).toEqual([
-        { kind: 'oauth', value: `token-for-subject-for-${TOKEN_A}` },
-        { kind: 'oauth', value: `token-for-subject-for-${TOKEN_B}` },
+      // away from another. Asserted on the header each one actually presents upstream rather than
+      // on its shape: the server is handed a slot-backed credential so that rotation can be
+      // reflected later, and what matters is whose authority it resolves to, not how it is
+      // wrapped. The exact values come from the stub validator.
+      expect(await Promise.all(credentials.map(authorizationHeader))).toEqual([
+        `Bearer exchanged-for-subject-for-${TOKEN_A}`,
+        `Bearer exchanged-for-subject-for-${TOKEN_B}`,
       ]);
       // Distinct instances, not one memoised server handed to both.
       expect(factory.mock.results[0].value).not.toBe(factory.mock.results[1].value);
+    });
+
+
+    it('serves each in-flight request with the credential that request authenticated with', async () => {
+      // One session, two requests overlapping while the client rotates: one began before the
+      // refresh, one after. Both belong to the same user, so both are entitled to the session --
+      // but they are not entitled to each other's authority. Holding the credential on the session
+      // lets whichever arrived last win for both, so the request presenting a freshly narrowed
+      // token executes with the older, wider one. Asserted end to end because the scoping has to
+      // survive the SDK's own dispatch to reach the tool handler.
+      harness = await startApp(credentialReportingServer, async (accessToken) => ({
+        status: 'ok',
+        identity: { subject: 'company-1:user-1' },
+        credential: delegatedCredential(accessToken, async () => `exchanged<${accessToken}>`),
+      }));
+
+      const initialized = await mcpRequest(harness.origin, { token: 'gremlin_oat_before' });
+      const sessionId = initialized.headers.get('mcp-session-id')!;
+
+      const [before, after] = await Promise.all([
+        mcpRequest(harness.origin, {
+          token: 'gremlin_oat_before',
+          sessionId,
+          body: callWhoami(2),
+        }).then(rpcBody),
+        mcpRequest(harness.origin, {
+          token: 'gremlin_oat_after',
+          sessionId,
+          body: callWhoami(3),
+        }).then(rpcBody),
+      ]);
+
+      expect(before.result.content[0].text).toBe('Bearer exchanged<gremlin_oat_before>');
+      expect(after.result.content[0].text).toBe('Bearer exchanged<gremlin_oat_after>');
     });
 
     it('refuses a session id presented with a different credential', async () => {
@@ -318,7 +398,7 @@ describe('MCP HTTP app', () => {
       harness = await startApp(undefined, async (accessToken) => ({
         status: 'ok',
         identity: { subject: credentialFingerprint(oauthCredential(accessToken)), unknown: true },
-        credential: oauthCredential(accessToken),
+        credential: delegatedCredential(accessToken, async () => `exchanged-for-${accessToken}`),
       }));
 
       const response = await mcpRequest(harness.origin, { token: TOKEN_A });
@@ -332,10 +412,28 @@ describe('MCP HTTP app', () => {
       // invalid_token and a fresh server, API client and cache allocated in its place. Binding to
       // the user keeps the security property and survives rotation, which is the point of having
       // refresh tokens at all.
-      harness = await startApp(undefined, async () => ok('company-1:user-1'));
+      // Captured so the assertion can be about the authority the session exercises, not just the
+      // status code. A 200 on its own passed even when the server was still authenticating with
+      // the token that opened the session, because `tools/list` never reaches the Gremlin API.
+      const built: GremlinCredential[] = [];
+      harness = await startApp(
+        (credential) => {
+          built.push(credential);
+          return createGremlinMcpServer(credential);
+        },
+        // Each token exchanges to its own upstream credential, as the real validator does.
+        async (accessToken) => ({
+          status: 'ok',
+          identity: { subject: 'company-1:user-1' },
+          credential: delegatedCredential(accessToken, async () => `exchanged-for-${accessToken}`),
+        }),
+      );
 
       const initialized = await mcpRequest(harness.origin, { token: 'gremlin_oat_before_refresh' });
       const sessionId = initialized.headers.get('mcp-session-id')!;
+
+      expect(built).toHaveLength(1);
+      expect(await authorizationHeader(built[0])).toBe('Bearer exchanged-for-gremlin_oat_before_refresh');
 
       const afterRefresh = await mcpRequest(harness.origin, {
         // A different token value for the same user, which is exactly what a refresh produces.
@@ -346,6 +444,14 @@ describe('MCP HTTP app', () => {
 
       expect(afterRefresh.status).toBe(200);
       expect(harness.app.sessionCount()).toBe(1);
+
+      // The session survived rotation without being rebuilt...
+      expect(built).toHaveLength(1);
+      // ...and the one server it kept now authenticates upstream with the token the caller is
+      // currently presenting, rather than the one that opened the session. Without this the
+      // session goes on acting under the first token's authority until that token expires, at
+      // which point every tool call fails while the transport still answers 200.
+      expect(await authorizationHeader(built[0])).toBe('Bearer exchanged-for-gremlin_oat_after_refresh');
     });
 
     it('attributes a source behind a private-address hop to the real caller', async () => {
