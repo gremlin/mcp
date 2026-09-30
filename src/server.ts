@@ -7,7 +7,7 @@ import { registerTools } from './tools/index.js';
 import type { GremlinCredential } from './auth/credential';
 
 export const SERVER_NAME = 'Gremlin Inc Server';
-export const SERVER_VERSION = '2.4.2';
+export const SERVER_VERSION = '2.5.0';
 
 /**
  * Builds a fully-registered MCP server bound to exactly one credential.

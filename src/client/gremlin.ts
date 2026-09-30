@@ -310,7 +310,7 @@ function buildHttpError(status: number, body: string): GremlinApiError {
 
 export class GremlinApi {
   private baseUrl: string = getServiceUrl();
-  private userAgent = "@gremlin/gremlin-mcp/2.4.2";
+  private userAgent = "@gremlin/gremlin-mcp/2.5.0";
 
   /**
    * Response cache, keyed on URL alone.
