@@ -1,5 +1,5 @@
 import TTLCache from '@isaacs/ttlcache';
-import { getServiceUrl } from '../config';
+import { getServiceUrl, getAuthHeader } from '../config';
 
 
 export interface Team {
@@ -636,7 +636,7 @@ export class GremlinApi {
         ...fetchOptions,
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Key ${process.env.GREMLIN_API_KEY}`,
+            'Authorization': getAuthHeader(),
             'User-Agent': this.userAgent,
             ...fetchOptions.headers,
         },

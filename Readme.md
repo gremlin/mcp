@@ -24,8 +24,11 @@ This MCP server provides access to Gremlin's reliability testing and management 
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `GREMLIN_API_KEY` | Yes | — | Your Gremlin API key. The server exits immediately if this is missing. |
+| `GREMLIN_API_KEY` | Exactly one of this or `GREMLIN_BEARER_TOKEN` | — | Your Gremlin API key, sent as `Authorization: Key <value>`. |
+| `GREMLIN_BEARER_TOKEN` | Exactly one of this or `GREMLIN_API_KEY` | — | A bearer token, sent as `Authorization: Bearer <value>`. |
 | `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
+
+The server exits immediately at startup if neither `GREMLIN_API_KEY` nor `GREMLIN_BEARER_TOKEN` is set, or if both are set.
 
 ### Claude Desktop
 
@@ -198,7 +201,7 @@ Executes an arbitrary Gremlin API endpoint. Endpoints requiring a `*_RUN` privil
 ## Troubleshooting
 
 ### Authentication Errors
-Ensure your `GREMLIN_API_KEY` is valid and has the necessary permissions. The server will exit immediately with an error message if the key is missing.
+Ensure exactly one of `GREMLIN_API_KEY` or `GREMLIN_BEARER_TOKEN` is set and valid, with the necessary permissions. The server will exit immediately with an error message if neither, or both, are set.
 
 ### Server Not Starting
 Check your MCP client's logs for error output from the server process. For Claude Desktop:
