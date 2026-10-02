@@ -1,29 +1,25 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z } from "zod";
-import { GremlinApi } from "./client/gremlin";
-import { registerResources } from "./resources/index.js";
-import { registerTools } from "./tools/index.js";
 
+import { apiKeyCredentialFromEnvironment } from './auth/credential';
+import { createGremlinMcpServer } from './server';
 
-if (!process.env.GREMLIN_API_KEY) {
-  process.stderr.write("Error: GREMLIN_API_KEY environment variable is required\n");
-  process.exit(1);
+/**
+ * The locally-run server: one process, one person, one static API key.
+ *
+ * <p>This is the deployment customers run themselves and the one Private Edition uses, and it is
+ * deliberately left alone. The hosted, OAuth-authenticated server is a separate entrypoint
+ * (`src/http.ts`) rather than a mode of this one, so that neither can quietly acquire the other's
+ * authentication model.
+ */
+function readCredentialOrExit() {
+  try {
+    return apiKeyCredentialFromEnvironment();
+  } catch (error) {
+    process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
 }
 
-const server = new McpServer({
-  name: "Gremlin Inc Server",
-  version: "2.4.2"
-});
-
-const gremlinApi = new GremlinApi();
-
-// Register resources
-registerResources(server, gremlinApi);
-
-// Register tools
-registerTools(server, gremlinApi);  
-
-
+const server = createGremlinMcpServer(readCredentialOrExit());
 const transport = new StdioServerTransport();
 server.connect(transport);

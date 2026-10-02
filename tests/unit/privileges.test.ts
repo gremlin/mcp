@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getRunPrivileges, createExecuteGremlinApiTool } from '../../src/tools/openapi';
+import {
+  createCreateGremlinApiTool,
+  createReadGremlinApiTool,
+  getRunPrivileges,
+} from '../../src/tools/openapi';
+import * as specLoader from '../../src/openapi/spec-loader';
 import type { OpenApiSpec } from '../../src/openapi/spec-loader';
 
 // vi.mock is hoisted above all imports, so MOCK_SPEC must be defined via
@@ -98,7 +103,11 @@ describe('getRunPrivileges', () => {
   });
 });
 
-// ── execute_gremlin_api handler — elicitation behaviour ───────────────────
+// ── API tool handlers — elicitation behaviour ─────────────────────────────
+//
+// The elicitation path is shared by every method-scoped tool (they all delegate to one
+// implementation), so exercising it through create_gremlin_api covers the others. The read tool is
+// checked separately because it must never prompt.
 
 function makeMockServer(elicitResponse: { action: string; content?: Record<string, unknown> }) {
   return {
@@ -114,7 +123,7 @@ function makeMockApi() {
   };
 }
 
-describe('execute_gremlin_api handler — privilege elicitation', () => {
+describe('API tool handlers — privilege elicitation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -122,10 +131,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('prompts for confirmation when the endpoint requires a _RUN privilege', async () => {
     const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     await tool.handler({
-      method: 'POST',
       path: '/failure-flags/experiments/{id}/run',
       pathParams: { id: 'exp-123' },
       queryParams: { teamId: 'team-1' },
@@ -140,10 +148,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('proceeds with the API call when the user confirms', async () => {
     const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     await tool.handler({
-      method: 'POST',
       path: '/failure-flags/experiments/{id}/run',
       pathParams: { id: 'exp-123' },
       queryParams: { teamId: 'team-1' },
@@ -155,11 +162,10 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('throws and does NOT call the API when the user declines (confirmed: false)', async () => {
     const mockServer = makeMockServer({ action: 'accept', content: { confirmed: false } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     await expect(
       tool.handler({
-        method: 'POST',
         path: '/failure-flags/experiments/{id}/run',
         pathParams: { id: 'exp-123' },
         queryParams: { teamId: 'team-1' },
@@ -172,11 +178,10 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('throws and does NOT call the API when the user dismisses the dialog (action: decline)', async () => {
     const mockServer = makeMockServer({ action: 'decline' });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     await expect(
       tool.handler({
-        method: 'POST',
         path: '/failure-flags/experiments/{id}/run',
         pathParams: { id: 'exp-123' },
         queryParams: { teamId: 'team-1' },
@@ -189,9 +194,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('skips elicitation entirely for endpoints without _RUN privileges', async () => {
     const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createReadGremlinApiTool(mockApi as never, mockServer as never);
 
-    await tool.handler({ method: 'GET', path: '/failure-flags/experiments' });
+    await tool.handler({ path: '/failure-flags/experiments' });
 
     expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
     expect(mockApi.execute).toHaveBeenCalledOnce();
@@ -205,11 +210,10 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
       },
     };
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     await expect(
       tool.handler({
-        method: 'POST',
         path: '/failure-flags/experiments/{id}/run',
         pathParams: { id: 'exp-123' },
         queryParams: { teamId: 'team-1' },
@@ -225,10 +229,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
         elicitInput: vi.fn().mockRejectedValue(new Error('MCP error -32601: Method not found')),
       },
     };
-    const tool = createExecuteGremlinApiTool(makeMockApi() as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(makeMockApi() as never, mockServer as never);
 
     const err = await tool.handler({
-      method: 'POST',
       path: '/failure-flags/experiments/{id}/run',
       pathParams: { id: 'exp-123' },
       queryParams: { teamId: 'team-1' },
@@ -240,10 +243,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('skips elicitation and proceeds when confirmExecution is true', async () => {
     const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     await tool.handler({
-      method: 'POST',
       path: '/failure-flags/experiments/{id}/run',
       pathParams: { id: 'exp-123' },
       queryParams: { teamId: 'team-1' },
@@ -257,10 +259,9 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('does not skip elicitation when confirmExecution is false', async () => {
     const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     await tool.handler({
-      method: 'POST',
       path: '/failure-flags/experiments/{id}/run',
       pathParams: { id: 'exp-123' },
       queryParams: { teamId: 'team-1' },
@@ -273,10 +274,62 @@ describe('execute_gremlin_api handler — privilege elicitation', () => {
   it('skips elicitation for endpoints with only non-_RUN permissions', async () => {
     const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
     const mockApi = makeMockApi();
-    const tool = createExecuteGremlinApiTool(mockApi as never, mockServer as never);
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
 
     // POST /failure-flags/experiments requires EXPERIMENTS_WRITE, not a _RUN permission
     await tool.handler({ method: 'POST', path: '/failure-flags/experiments', body: {} });
+
+    expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
+    expect(mockApi.execute).toHaveBeenCalledOnce();
+  });
+});
+
+// ── spec-unavailable behaviour ────────────────────────────────────────────
+
+describe('API tool handlers — when the spec cannot be loaded', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('prompts anyway for a write, rather than silently skipping the check', async () => {
+    // This used to fail open: on a spec fetch failure runPrivileges stayed empty and no prompt
+    // happened at all, so a transient spec outage removed the confirmation from every endpoint
+    // that needed one. Unknown has to mean dangerous here -- we cannot tell whether the endpoint
+    // starts an experiment, and guessing "harmless" is the wrong direction for a call that might.
+    vi.mocked(specLoader.getSpec).mockRejectedValueOnce(new Error('spec unreachable'));
+    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockApi = makeMockApi();
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
+
+    await tool.handler({ path: '/some/endpoint' });
+
+    expect(mockServer.server.elicitInput).toHaveBeenCalledOnce();
+    expect(mockServer.server.elicitInput.mock.calls[0][0].message).toContain(
+      'could not be loaded',
+    );
+    expect(mockApi.execute).toHaveBeenCalledOnce();
+  });
+
+  it('blocks the write when the prompt is declined', async () => {
+    vi.mocked(specLoader.getSpec).mockRejectedValueOnce(new Error('spec unreachable'));
+    const mockServer = makeMockServer({ action: 'decline' });
+    const mockApi = makeMockApi();
+    const tool = createCreateGremlinApiTool(mockApi as never, mockServer as never);
+
+    await expect(tool.handler({ path: '/some/endpoint' })).rejects.toThrow(
+      /Execution cancelled/,
+    );
+    expect(mockApi.execute).not.toHaveBeenCalled();
+  });
+
+  it('does not prompt for a read, which cannot start anything', async () => {
+    // Failing closed on a GET would prompt on every read during a spec outage, for no gain.
+    vi.mocked(specLoader.getSpec).mockRejectedValueOnce(new Error('spec unreachable'));
+    const mockServer = makeMockServer({ action: 'accept', content: { confirmed: true } });
+    const mockApi = makeMockApi();
+    const tool = createReadGremlinApiTool(mockApi as never, mockServer as never);
+
+    await tool.handler({ path: '/some/endpoint' });
 
     expect(mockServer.server.elicitInput).not.toHaveBeenCalled();
     expect(mockApi.execute).toHaveBeenCalledOnce();

@@ -58,7 +58,7 @@ export interface ResponseSummary {
 
 // Filters each OpenAPI response object down to status code, description, and
 // content-types, dropping everything nested under each media type (schema,
-// examples, encoding, etc). This tells execute_gremlin_api callers whether to
+// examples, encoding, etc). This tells API tool callers whether to
 // expect JSON or plain text for a given endpoint without blowing up the
 // context with schema structure and examples.
 function summarizeResponses(

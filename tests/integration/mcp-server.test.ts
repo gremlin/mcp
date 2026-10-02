@@ -79,7 +79,12 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(names).toContain('run_reliability_test');
     expect(names).toContain('get_pending_test_runs');
     expect(names).toContain('search_gremlin_api');
-    expect(names).toContain('execute_gremlin_api');
+    // Split by HTTP safety class: one tool spanning GET and DELETE cannot carry an honest
+    // readOnly/destructive annotation, and Anthropic's directory review rejects the combination.
+    expect(names).toContain('read_gremlin_api');
+    expect(names).toContain('create_gremlin_api');
+    expect(names).toContain('update_gremlin_api');
+    expect(names).toContain('delete_gremlin_api');
     expect(names).toContain('get_container');
     expect(names).toContain('match_containers');
     expect(names).toContain('list_container_label_keys');
@@ -244,9 +249,8 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     );
 
     const activeRunResult = await client.callTool({
-      name: 'execute_gremlin_api',
+      name: 'read_gremlin_api',
       arguments: {
-        method: 'GET',
         path: '/reliability-tests/runs',
         queryParams: { teamId: teamId!, serviceId: serviceId!, pageSize: '1' },
       },

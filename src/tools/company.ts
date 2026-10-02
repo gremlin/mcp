@@ -10,6 +10,7 @@ const teamIdSchema = z.string().describe(
 export function createGetPricingReportTool(api: GremlinApi) {
     return {
         name: "get_pricing_report",
+        title: "Get Pricing Report",
         description: "Fetches the pricing usage report for the company over a specified date range. Returns usage broken down by tracking period including active agents, targetable applications, and unique targets by type (host, container, application).",
         annotations: { readOnlyHint: true },
         schema: {
@@ -36,6 +37,7 @@ export function createGetPricingReportTool(api: GremlinApi) {
 export function createGetClientSummaryTool(api: GremlinApi) {
     return {
         name: "get_client_summary",
+        title: "Get Agent Summary",
         description: "Loads the client (agent) summary for a team over a specified time period. Shows agent activity and status. Requires a teamId, use the list_teams tool first to find available teams.",
         annotations: { readOnlyHint: true },
         schema: {
@@ -63,6 +65,7 @@ export function createGetClientSummaryTool(api: GremlinApi) {
 export function createGetAttackSummaryTool(api: GremlinApi) {
     return {
         name: "get_attack_summary",
+        title: "Get Experiment Summary",
         description: "Loads the attack summary for a team over a specified time period. Shows attack activity and results. Requires a teamId, use the list_teams tool first to find available teams.",
         annotations: { readOnlyHint: true },
         schema: {

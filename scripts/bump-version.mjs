@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Bumps the server version everywhere it's hardcoded:
-//   package.json, package-lock.json (x2), src/main.ts, src/client/gremlin.ts
+//   package.json, package-lock.json (x2), src/server.ts, src/client/gremlin.ts
 //
 // Usage: make bump VERSION=<major|minor|patch>
 import { readFileSync, writeFileSync } from "fs";
@@ -38,14 +38,21 @@ lock.version = newVersion;
 if (lock.packages?.[""]) lock.packages[""].version = newVersion;
 writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
 
-// src/main.ts — McpServer({ ..., version: "x.y.z" })
-const mainPath = path.join(root, "src/main.ts");
-const main = readFileSync(mainPath, "utf8");
-const nextMain = main.replace(/version:\s*"[\d.]+"/, `version: "${newVersion}"`);
-if (nextMain === main) {
-  console.error(`Warning: could not find a version string to replace in src/main.ts`);
+// src/server.ts — export const SERVER_VERSION = "x.y.z"
+//
+// This lived in src/main.ts until server construction moved into src/server.ts, at which point
+// the replacement below silently stopped matching: the warning is printed, but `make bump` still
+// exits 0, so the only visible symptom was the pre-commit sync check failing afterwards.
+const serverPath = path.join(root, "src/server.ts");
+const server = readFileSync(serverPath, "utf8");
+const nextServer = server.replace(
+  /(SERVER_VERSION\s*=\s*)(['"])[\d.]+\2/,
+  `$1$2${newVersion}$2`
+);
+if (nextServer === server) {
+  console.error(`Warning: could not find a version string to replace in src/server.ts`);
 } else {
-  writeFileSync(mainPath, nextMain);
+  writeFileSync(serverPath, nextServer);
 }
 
 // src/client/gremlin.ts — userAgent = "@gremlin/gremlin-mcp/x.y.z"

@@ -8,6 +8,7 @@ const teamIdSchema = z.string().describe(
 export function createGetContainerTool(api: GremlinApi) {
   return {
     name: 'get_container',
+    title: 'Get Container',
     description: [
       'Fetches a single container by its ID — a quick point lookup, not a search.',
       "Returns the container's id, clientId, name, and labels.",
@@ -36,6 +37,7 @@ export function createGetContainerTool(api: GremlinApi) {
 export function createMatchContainersTool(api: GremlinApi) {
   return {
     name: 'match_containers',
+    title: 'Match Containers',
     description: [
       'Previews which of the team\'s containers a targeting selector would match, using the',
       'same matching logic a real Service\'s targeting strategy uses — so this shows exactly',
@@ -94,6 +96,7 @@ export function createMatchContainersTool(api: GremlinApi) {
 export function createListContainerLabelKeysTool(api: GremlinApi) {
   return {
     name: 'list_container_label_keys',
+    title: 'List Container Label Keys',
     description: [
       "Lists the distinct label keys observed across all of the team's containers",
       '(keys only — no values or counts).',

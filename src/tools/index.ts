@@ -4,11 +4,25 @@ import { createGetCurrentTestSuiteTool, createGetPendingTestRunsTool, createGetR
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
 import { createListTeamsTool } from "./teams";
 import { createGetPricingReportTool, createGetClientSummaryTool, createGetAttackSummaryTool } from "./company";
-import { createSearchGremlinApiTool, createExecuteGremlinApiTool } from "./openapi";
+import {
+  createCreateGremlinApiTool,
+  createDeleteGremlinApiTool,
+  createReadGremlinApiTool,
+  createSearchGremlinApiTool,
+  createUpdateGremlinApiTool,
+} from "./openapi";
 import { createGetContainerTool, createMatchContainersTool, createListContainerLabelKeysTool } from "./containers";
 
 interface Tool {
   name: string;
+  /**
+   * Human-readable display name, shown to users wherever the tool is listed.
+   *
+   * <p>Required: the directory review rejects a tool without one, and the submission portal flags
+   * it before a listing can be sent. Kept non-optional here so a new tool cannot be added without
+   * one -- that is a compile error rather than a rejection weeks later.
+   */
+  title: string;
   description: string;
   schema: Record<string, any>;
   annotations?: Record<string, any>;
@@ -40,13 +54,20 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createListContainerLabelKeysTool(api),
 
     createSearchGremlinApiTool(api),
-    createExecuteGremlinApiTool(api, server),
+    // Split by HTTP safety class rather than one tool taking a method parameter: a single tool
+    // spanning GET and DELETE cannot carry an honest readOnly/destructive annotation, and those
+    // annotations are what decide whether Claude confirms a call.
+    createReadGremlinApiTool(api, server),
+    createCreateGremlinApiTool(api, server),
+    createUpdateGremlinApiTool(api, server),
+    createDeleteGremlinApiTool(api, server),
   ];
 
   for (const tool of tools) {
     server.registerTool(
       tool.name,
       {
+        title: tool.title,
         description: tool.description,
         inputSchema: tool.schema as any,
         annotations: tool.annotations as any,
