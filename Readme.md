@@ -155,8 +155,13 @@ requirement, not an optimisation: the API client's response cache is keyed on UR
 shared instance would answer one user's request with another user's teams, services and reports
 for the full cache TTL, and every response would look valid.
 
-Sessions are additionally bound to the SHA-256 fingerprint of the credential that opened them, so
-attaching to a session requires presenting that same token — a leaked session id alone will not do.
+Sessions are additionally bound to the user who opened them, as `company_id:user_id` from the
+API, so attaching to a session requires a token for that same user — a leaked session id alone
+will not do. It is the user rather than the token because Claude refreshes its access token
+about hourly, and a session bound to the token would end with each refresh. Each request is
+then served with the token it presented, not the one that opened the session. If the API cannot
+say who the user is, the session is bound to the SHA-256 fingerprint of the token instead, and
+does not survive a refresh.
 
 Two bounds sit in front of session creation, because a session is allocated on the first request
 rather than on demand: `GREMLIN_MCP_MAX_SESSIONS` (default 2000) caps how many can exist, and
