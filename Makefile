@@ -93,5 +93,7 @@ docker-build:
 		-t $(IMAGE):$(IMAGE_TAG) \
 		$(DOCKER_BUILD_OPTS) .
 
+# -e takes precedence over --env-file, so a PORT in .env cannot move the server off the port being
+# published.
 docker-run:
-	docker run --rm -p 8080:8080 --env-file .env $(IMAGE):$(IMAGE_TAG)
+	docker run --rm -p 8080:8080 --env-file .env -e PORT=8080 $(IMAGE):$(IMAGE_TAG)

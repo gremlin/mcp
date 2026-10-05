@@ -123,7 +123,8 @@ make docker-run
 `docker-build` builds `gremlin/mcp-server` for your machine's architecture, tagged with the
 commit's timestamp (override with `IMAGE` and `IMAGE_TAG`). The image contains only the bundled
 `build/http.mjs`. `docker-run` serves it on port `8080`, reading the hosted variables above from
-`.env`. Point liveness and readiness probes at `/healthz`.
+`.env` except `PORT`, which it fixes at `8080` to match the published port. Point liveness and
+readiness probes at `/healthz`.
 
 The runtime base defaults to `gremlin/node:24`, which is not publicly pullable. Outside Gremlin,
 pass any image whose entrypoint is `node`:
