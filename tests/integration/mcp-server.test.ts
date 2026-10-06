@@ -76,6 +76,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(names).toContain('list_service_risks');
     expect(names).toContain('list_services');
     expect(names).toContain('list_teams');
+    expect(names).toContain('get_team');
     expect(names).toContain('run_reliability_test');
     expect(names).toContain('get_pending_test_runs');
     expect(names).toContain('search_gremlin_api');
@@ -110,8 +111,20 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     expect(teams.length).toBeGreaterThan(0);
     expect(teams[0]).toHaveProperty('identifier');
     expect(teams[0]).toHaveProperty('name');
+    expect(Object.keys(teams[0]).sort()).toEqual(['created_at', 'identifier', 'name', 'production']);
 
     teamId = teams[0].identifier;
+  });
+
+  it('get_team returns the full team', async () => {
+    expect(teamId).toBeDefined();
+
+    const result = await client.callTool({ name: 'get_team', arguments: { teamId: teamId! } }) as ToolResult;
+    expect(result.isError).toBeFalsy();
+
+    const team = parseToolResult(result);
+    expect(team).toHaveProperty('identifier', teamId);
+    expect(team).toHaveProperty('company_id');
   });
 
   it('list_services returns an array of services', async () => {
