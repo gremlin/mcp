@@ -6,7 +6,23 @@
 
 .PHONY: install hooks inspector build compile typecheck bundle \
         test unit-test ci-install ci-unit-test bump \
-        publish npm-publish stage-publish verify-tag-version
+        publish npm-publish stage-publish verify-tag-version \
+        docker-build docker-run
+
+IMAGE             ?= gremlin/mcp-server
+BUILD_VERSION     ?= $(shell TZ=UTC git log -1 --date=format-local:'%Y%m%d%H%M%S' --format=%cd)
+IMAGE_TAG         ?= $(BUILD_VERSION)
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct)
+BASE_IMAGE        ?= gremlin/node:24
+PUSH              ?= false
+
+# Pushing is opt-in rather than keyed on CI, which CircleCI sets to true in every job.
+ifeq ($(PUSH),true)
+DOCKER_BUILD_OPTS = --sbom=true --provenance=true --platform=linux/amd64,linux/arm64 \
+	--output type=registry,rewrite-timestamp=true
+else
+DOCKER_BUILD_OPTS = --load
+endif
 
 install: hooks
 	npm install
@@ -67,3 +83,17 @@ npm-publish:
 # The npm Trusted Publisher is scoped to staged publishes.
 stage-publish:
 	npm stage publish --access public
+
+# The hosted server's image. Builds for the local architecture and loads it; PUSH=true builds
+# multi-arch and pushes instead.
+docker-build:
+	SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) docker buildx build \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
+		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		-t $(IMAGE):$(IMAGE_TAG) \
+		$(DOCKER_BUILD_OPTS) .
+
+# -e takes precedence over --env-file, so a PORT in .env cannot move the server off the port being
+# published.
+docker-run:
+	docker run --rm -p 8080:8080 --env-file .env -e PORT=8080 $(IMAGE):$(IMAGE_TAG)

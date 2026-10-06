@@ -62,7 +62,7 @@ server, and nothing in the hosted column is read by the stdio server.
 | `GREMLIN_MCP_RESOURCE_URL` | **Yes** | — | This server's own public origin — `https://mcp.gremlin.com` in production, host-only with no path. Its RFC 8707 resource identifier, compared as an exact string, so it must match the `resource` a client sends and what the authorization server audiences tokens for. No default: a wrong guess surfaces as an authentication failure with no obvious cause, so the server refuses to start without it. |
 | `GREMLIN_MCP_OAUTH_CLIENT_ID` | **Yes** | — | This server's own OAuth client id, for authenticating at the token endpoint during exchange. Issued by registering the server as a client with the authorization server; see [Deploying the hosted server](#deploying-the-hosted-server). |
 | `GREMLIN_MCP_OAUTH_CLIENT_SECRET` | **Yes** | — | The matching secret. Belongs in a secret store, not in a manifest. Printed once at registration and not recoverable afterwards. |
-| `GREMLIN_API_RESOURCE_URL` | No | value of `GREMLIN_AUTHORIZATION_SERVER` | The audience this server asks for when exchanging — the Gremlin API. Distinct from `GREMLIN_MCP_RESOURCE_URL`, which is this server: tokens arrive audienced for this server and are exchanged for one audienced at the API. |
+| `GREMLIN_API_RESOURCE_URL` | No | `https://api.gremlin.com` | The audience this server asks for when exchanging — the Gremlin API. Distinct from `GREMLIN_MCP_RESOURCE_URL`, which is this server: tokens arrive audienced for this server and are exchanged for one audienced at the API. |
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
 | `PORT` | No | `8080` | HTTP listen port. |
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
@@ -112,6 +112,26 @@ configured here, which makes registration a prerequisite rather than a setting.
 Running against your own Gremlin deployment rather than Gremlin's? Steps 1 and 3 are the parts
 that need coordinating with whoever operates that authorization server; everything else is
 local to this repo.
+
+### Running the hosted server in a container
+
+```bash
+make docker-build
+make docker-run
+```
+
+`docker-build` builds `gremlin/mcp-server` for your machine's architecture, tagged with the
+commit's timestamp (override with `IMAGE` and `IMAGE_TAG`). The image contains only the bundled
+`build/http.mjs`. `docker-run` serves it on port `8080`, reading the hosted variables above from
+`.env` except `PORT`, which it fixes at `8080` to match the published port. Point liveness and
+readiness probes at `/healthz`.
+
+The runtime base defaults to `gremlin/node:24`, which is not publicly pullable. Outside Gremlin,
+pass any image whose entrypoint is `node`:
+
+```bash
+make docker-build BASE_IMAGE=cgr.dev/chainguard/node:latest
+```
 
 ### Why the resource identifier is the MCP server, not the API
 
