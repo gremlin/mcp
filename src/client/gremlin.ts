@@ -351,7 +351,7 @@ export class GremlinApi {
   async getTeam(teamId: string): Promise<Team> {
     assertRequiredParams(Boolean(teamId), 'teamId is required to fetch the team details.');
     // The endpoint is `teams/{teamIdOrName}` and returns an array, even for an ID.
-    const [team] = await this.jsonRequestWithRetry<Team[]>(`teams/${teamId}`, {
+    const [team] = await this.jsonRequestWithRetry<Team[]>(`teams/${encodeURIComponent(teamId)}`, {
       method: 'GET',
     });
     if (!team) {
