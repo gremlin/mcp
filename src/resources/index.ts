@@ -30,7 +30,7 @@ export function registerResources(server: McpServer, api: GremlinApi) {
             resources.push({
               uri: `gremlin://team/${team.identifier}`,
               name: team.name,
-              companyId: team.companyId,
+              companyId: team.company_id,
               production: team.production,
             });
           });
