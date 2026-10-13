@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 
 import { createMcpHttpApp, exchangeForApiCredential } from './http/app';
+import { positiveOr } from './http/source-limits';
 import {
   getApiResourceIdentifier,
   getAuthorizationServer,
@@ -44,8 +45,8 @@ const app = createMcpHttpApp({
 const httpServer = createServer((req, res) => app.handle(req, res));
 
 // Must exceed the idle timeout of any load balancer in front, or it can return 502s.
-const keepAliveTimeoutSeconds = Number(process.env.GREMLIN_MCP_KEEP_ALIVE_TIMEOUT_SECONDS);
-if (keepAliveTimeoutSeconds > 0) httpServer.keepAliveTimeout = keepAliveTimeoutSeconds * 1000;
+const keepAliveTimeoutSeconds = positiveOr(process.env.GREMLIN_MCP_KEEP_ALIVE_TIMEOUT_SECONDS, 0);
+if (keepAliveTimeoutSeconds) httpServer.keepAliveTimeout = keepAliveTimeoutSeconds * 1000;
 
 const reaper = setInterval(() => app.reapIdleSessions(), 60_000);
 reaper.unref();
