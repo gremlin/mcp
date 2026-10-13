@@ -343,7 +343,7 @@ Lists the distinct label keys observed across all of the team's containers (keys
 
 #### `search_gremlin_api`
 Searches the Gremlin OpenAPI spec for endpoints, returning method, path, parameters, and request body schema for each match.
-- **Parameters:** `query` (required), `method` (optional, enum: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`), `tag` (optional, partial/case-insensitive match), `limit` (optional, default: 10, max: 50)
+- **Parameters:** `query` (required), `tag` (optional, partial/case-insensitive match), `limit` (optional, default: 10, max: 50). There is no method filter: every result carries its `method`, so write endpoints turn up alongside reads and the method tells you which API tool calls it.
 
 The API tools are split by HTTP safety class rather than taking a `method` parameter. A single tool
 spanning `GET` and `DELETE` cannot carry an honest `readOnlyHint`/`destructiveHint`, and those

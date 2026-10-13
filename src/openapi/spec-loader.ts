@@ -155,13 +155,11 @@ function tokenize(query: string): string[] {
 export function searchSpec(
   spec: OpenApiSpec,
   query: string,
-  methodFilter?: string,
   tagFilter?: string,
   topN = 10,
 ): EndpointMatch[] {
   const queryLower = query.toLowerCase();
   const tokens = tokenize(query);
-  const methodLower = methodFilter?.toLowerCase();
   const tagLower = tagFilter?.toLowerCase();
 
   const scored: Array<{ score: number; match: EndpointMatch }> = [];
@@ -171,7 +169,6 @@ export function searchSpec(
       const op = pathItem[method];
       if (!op) continue;
 
-      if (methodLower && method !== methodLower) continue;
       if (tagLower && !op.tags?.some(t => t.toLowerCase().includes(tagLower))) continue;
 
       const pathLower = path.toLowerCase();
