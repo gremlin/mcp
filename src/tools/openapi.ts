@@ -23,10 +23,6 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
       query: z.string().describe(
         'Text to search for in endpoint paths, summaries, operationIds, tags, and descriptions.',
       ),
-      method: z
-        .enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-        .optional()
-        .describe('Filter results to a specific HTTP method.'),
       tag: z
         .string()
         .optional()
@@ -39,13 +35,8 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
         .optional()
         .describe('Maximum number of results to return. Defaults to 10.'),
     },
-    handler: async (args: {
-      query: string;
-      method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-      tag?: string;
-      limit?: number;
-    }) => {
-      const { query, method, tag, limit = 10 } = args;
+    handler: async (args: { query: string; tag?: string; limit?: number }) => {
+      const { query, tag, limit = 10 } = args;
 
       assertRequiredParams(Boolean(query?.trim()), 'query must be a non-empty string');
 
@@ -56,7 +47,7 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
         throw wrapGremlinError('Failed to load Gremlin OpenAPI spec', err);
       }
 
-      const results = searchSpec(spec, query, method, tag, limit);
+      const results = searchSpec(spec, query, tag, limit);
 
       if (results.length === 0) {
         return {
