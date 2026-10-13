@@ -70,7 +70,8 @@ export function registerTools(server: McpServer, api: GremlinApi) {
         title: tool.title,
         description: tool.description,
         inputSchema: tool.schema as any,
-        annotations: tool.annotations as any,
+        // The spec defines title in both places; clients differ in which one they display.
+        annotations: { ...tool.annotations, title: tool.title } as any,
       },
       async (args: Record<string, any>, extra: any) => {
         try {

@@ -22,7 +22,7 @@ function registeredTools() {
   // a client would actually be shown without standing up a transport.
   return (server as unknown as { _registeredTools: Record<string, {
     title?: string;
-    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+    annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean };
     inputSchema?: Record<string, unknown>;
   }> })._registeredTools;
 }
@@ -45,6 +45,14 @@ describe('directory review criteria', () => {
       .map(([name]) => name);
 
     expect(missing).toEqual([]);
+  });
+
+  it('repeats every tool title in its annotations', () => {
+    const mismatched = Object.entries(registeredTools())
+      .filter(([, tool]) => tool.annotations?.title !== tool.title)
+      .map(([name]) => name);
+
+    expect(mismatched).toEqual([]);
   });
 
   it('registers every tool with a read-only or destructive hint', () => {
