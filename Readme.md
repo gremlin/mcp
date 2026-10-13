@@ -65,6 +65,7 @@ server, and nothing in the hosted column is read by the stdio server.
 | `GREMLIN_API_RESOURCE_URL` | No | `https://api.gremlin.com` | The audience this server asks for when exchanging — the Gremlin API. Distinct from `GREMLIN_MCP_RESOURCE_URL`, which is this server: tokens arrive audienced for this server and are exchanged for one audienced at the API. |
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
 | `PORT` | No | `8080` | HTTP listen port. |
+| `GREMLIN_MCP_KEEP_ALIVE_TIMEOUT_SECONDS` | No | *(Node's default)* | Idle keep-alive timeout. Set above the idle timeout of any load balancer or proxy in front, or it can return `502`. |
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. Source is the rightmost globally-routable `X-Forwarded-For` hop, so a private load-balancer hop does not collapse every caller into one bucket. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED` | No | `1000` | The same cap for a source in `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS`. |
