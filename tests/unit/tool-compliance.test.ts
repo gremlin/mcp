@@ -22,8 +22,8 @@ function registeredTools() {
   // a client would actually be shown without standing up a transport.
   return (server as unknown as { _registeredTools: Record<string, {
     title?: string;
-    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
-    inputSchema?: Record<string, unknown>;
+    annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean };
+    inputSchema?: { shape?: Record<string, unknown> };
   }> })._registeredTools;
 }
 
@@ -47,6 +47,14 @@ describe('directory review criteria', () => {
     expect(missing).toEqual([]);
   });
 
+  it('repeats every tool title in its annotations', () => {
+    const mismatched = Object.entries(registeredTools())
+      .filter(([, tool]) => tool.annotations?.title !== tool.title)
+      .map(([name]) => name);
+
+    expect(mismatched).toEqual([]);
+  });
+
   it('registers every tool with a read-only or destructive hint', () => {
     const missing = Object.entries(registeredTools())
       .filter(([, tool]) => {
@@ -67,16 +75,19 @@ describe('directory review criteria', () => {
     const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
     const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+    type ZodField = { options?: unknown[]; unwrap?: () => ZodField };
+
     const offenders = Object.entries(registeredTools())
       .map(([name, tool]) => {
-        const methodField = tool.inputSchema?.['method'] as
-          | { options?: unknown[]; _def?: { values?: unknown[] } }
-          | undefined;
+        // The SDK registers a ZodObject, so the fields are on its shape, and an optional enum has
+        // to be unwrapped to reach its options.
+        let methodField = tool.inputSchema?.shape?.['method'] as ZodField | undefined;
+        while (methodField && !methodField.options && methodField.unwrap) {
+          methodField = methodField.unwrap();
+        }
         if (!methodField) return null;
 
-        const options = (methodField.options ??
-          methodField._def?.values ??
-          []) as string[];
+        const options = (methodField.options ?? []) as string[];
         const spansBoth =
           options.some((o) => SAFE.has(String(o).toUpperCase())) &&
           options.some((o) => UNSAFE.has(String(o).toUpperCase()));
@@ -86,6 +97,15 @@ describe('directory review criteria', () => {
       .filter((name): name is string => name !== null);
 
     expect(offenders).toEqual([]);
+  });
+
+  it('sees the method parameters the safety check above relies on', () => {
+    // That check reads a private SDK structure. If the structure changes it finds no method fields
+    // and passes vacuously, as it once did; these two tools both declare one.
+    const shape = (name: string) => registeredTools()[name]?.inputSchema?.shape ?? {};
+
+    expect(Object.keys(shape('update_gremlin_api'))).toContain('method');
+    expect(Object.keys(shape('search_gremlin_api'))).not.toContain('method');
   });
 
   it('keeps tool names within the 64-character limit', () => {

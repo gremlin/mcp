@@ -65,6 +65,7 @@ server, and nothing in the hosted column is read by the stdio server.
 | `GREMLIN_API_RESOURCE_URL` | No | `https://api.gremlin.com` | The audience this server asks for when exchanging — the Gremlin API. Distinct from `GREMLIN_MCP_RESOURCE_URL`, which is this server: tokens arrive audienced for this server and are exchanged for one audienced at the API. |
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
 | `PORT` | No | `8080` | HTTP listen port. |
+| `GREMLIN_MCP_KEEP_ALIVE_TIMEOUT_SECONDS` | No | *(Node's default)* | Idle keep-alive timeout. Set above the idle timeout of any load balancer or proxy in front, or it can return `502`. |
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. Source is the rightmost globally-routable `X-Forwarded-For` hop, so a private load-balancer hop does not collapse every caller into one bucket. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED` | No | `1000` | The same cap for a source in `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS`. |
@@ -264,7 +265,11 @@ Add the following to your MCP settings:
 ### Teams
 
 #### `list_teams`
-Lists all teams you have access to. Nearly every other tool requires a `teamId`, and this is how to find one.
+Lists all teams you have access to. Nearly every other tool requires a `teamId`, and this is how to find one. Returns a summary per team: `identifier`, `name`, `production`, `created_at`.
+
+#### `get_team`
+Fetches the full details of a single team (state, preferences, client versions, certificate metadata, etc.).
+- **Parameters:** `teamId` (required)
 
 ### Service Management
 
@@ -343,7 +348,7 @@ Lists the distinct label keys observed across all of the team's containers (keys
 
 #### `search_gremlin_api`
 Searches the Gremlin OpenAPI spec for endpoints, returning method, path, parameters, and request body schema for each match.
-- **Parameters:** `query` (required), `method` (optional, enum: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`), `tag` (optional, partial/case-insensitive match), `limit` (optional, default: 10, max: 50)
+- **Parameters:** `query` (required), `tag` (optional, partial/case-insensitive match), `limit` (optional, default: 10, max: 50). There is no method filter: every result carries its `method`, so write endpoints turn up alongside reads and the method tells you which API tool calls it.
 
 The API tools are split by HTTP safety class rather than taking a `method` parameter. A single tool
 spanning `GET` and `DELETE` cannot carry an honest `readOnlyHint`/`destructiveHint`, and those

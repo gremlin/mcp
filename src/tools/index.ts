@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GremlinApi, GremlinApiError } from "../client/gremlin";
 import { createGetCurrentTestSuiteTool, createGetPendingTestRunsTool, createGetRecentReliabilityTestsTool, createGetReliabilityExperimentTool, createGetReliabilityReportTool, createRunReliabilityTestTool } from "./reliability-management";
 import { createGetServiceDependenciesTool, createGetServiceStatusChecksTool, createListServiceRisksTool, createListServicesTool } from "./services";
-import { createListTeamsTool } from "./teams";
+import { createGetTeamTool, createListTeamsTool } from "./teams";
 import { createGetPricingReportTool, createGetClientSummaryTool, createGetAttackSummaryTool } from "./company";
 import {
   createCreateGremlinApiTool,
@@ -44,6 +44,7 @@ export function registerTools(server: McpServer, api: GremlinApi) {
     createGetPendingTestRunsTool(api),
 
     createListTeamsTool(api),
+    createGetTeamTool(api),
 
     createGetPricingReportTool(api),
     createGetClientSummaryTool(api),
@@ -70,7 +71,8 @@ export function registerTools(server: McpServer, api: GremlinApi) {
         title: tool.title,
         description: tool.description,
         inputSchema: tool.schema as any,
-        annotations: tool.annotations as any,
+        // The spec defines title in both places; clients differ in which one they display.
+        annotations: { ...tool.annotations, title: tool.title } as any,
       },
       async (args: Record<string, any>, extra: any) => {
         try {

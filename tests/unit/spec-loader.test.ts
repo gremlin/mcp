@@ -98,12 +98,12 @@ describe('searchSpec', () => {
       // "failure-flags experiments run" tokenizes to ["failure", "flags", "experiments", "run"]
       // — none of which appear as a verbatim substring of the whole query in any field,
       // but each token individually matches the path.
-      const results = searchSpec(MOCK_SPEC, 'failure-flags experiments run', 'POST');
+      const results = searchSpec(MOCK_SPEC, 'failure-flags experiments run');
       expect(results.some(r => r.path === '/failure-flags/experiments/{id}/run')).toBe(true);
     });
 
     it('ranks the best multi-token match first', () => {
-      const results = searchSpec(MOCK_SPEC, 'failure-flags experiments run', 'POST');
+      const results = searchSpec(MOCK_SPEC, 'failure-flags experiments run');
       expect(results[0].path).toBe('/failure-flags/experiments/{id}/run');
     });
 
@@ -114,27 +114,26 @@ describe('searchSpec', () => {
     });
 
     it('natural-language word order still resolves the right endpoint', () => {
-      const results = searchSpec(MOCK_SPEC, 'run failure flag experiment', 'POST');
+      const results = searchSpec(MOCK_SPEC, 'run failure flag experiment');
       expect(results.some(r => r.path === '/failure-flags/experiments/{id}/run')).toBe(true);
     });
   });
 
-  describe('method filter', () => {
-    it('excludes endpoints with the wrong method', () => {
-      const results = searchSpec(MOCK_SPEC, 'experiment', 'GET');
-      expect(results.every(r => r.method === 'GET')).toBe(true);
-    });
+  describe('methods in results', () => {
+    it('labels every result with its method, so write endpoints are found without a filter', () => {
+      const results = searchSpec(MOCK_SPEC, 'experiment');
+      const methods = new Set(results.map((r) => r.method));
 
-    it('returns results for the matching method', () => {
-      const results = searchSpec(MOCK_SPEC, 'experiment', 'POST');
-      expect(results.length).toBeGreaterThan(0);
-      expect(results.every(r => r.method === 'POST')).toBe(true);
+      expect(methods).toEqual(new Set(['GET', 'POST']));
+      expect(
+        results.some((r) => r.method === 'POST' && r.path === '/failure-flags/experiments/{id}/run'),
+      ).toBe(true);
     });
   });
 
   describe('topN limit', () => {
     it('respects the limit parameter', () => {
-      const results = searchSpec(MOCK_SPEC, 'experiment', undefined, undefined, 2);
+      const results = searchSpec(MOCK_SPEC, 'experiment', undefined, 2);
       expect(results.length).toBeLessThanOrEqual(2);
     });
   });

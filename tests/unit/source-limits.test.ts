@@ -33,6 +33,7 @@ describe('positiveOr', () => {
     expect(positiveOr('25', 60)).toBe(25);
     expect(positiveOr(undefined, 60)).toBe(60);
     expect(positiveOr('abc', 60)).toBe(60);
+    expect(positiveOr('Infinity', 60)).toBe(60);
     expect(positiveOr('0', 60)).toBe(60);
     expect(positiveOr('-5', 60)).toBe(60);
   });

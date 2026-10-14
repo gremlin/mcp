@@ -3,11 +3,6 @@ import { getServiceUrl } from '../config';
 import { authorizationHeader, type GremlinCredential } from '../auth/credential';
 
 
-export interface Team {
-  identifier: string;
-  name: string;
-}
-
 export interface Service {
   serviceId: string;
   teamId: string;
@@ -196,11 +191,22 @@ export interface ContainerSelectorRequest {
 
 export interface User { }
 
+// The real wire shape: snake_case, despite the OpenAPI `TeamResponse` schema claiming camelCase.
 export interface Team {
   identifier: string;
   name: string;
-  companyId: string;
+  company_id: string;
   production: boolean;
+  created_at: string;
+  state?: string;
+  default_team_role?: string;
+  certificate?: string;
+  certificate_set_at?: string;
+  certificate_set_by?: string;
+  secret_set_at?: string;
+  secret_set_by?: string;
+  client_versions?: Record<string, unknown>;
+  prefs?: Record<string, unknown>;
 }
 
 export interface GremlinApiResult {
@@ -310,7 +316,7 @@ function buildHttpError(status: number, body: string): GremlinApiError {
 
 export class GremlinApi {
   private baseUrl: string = getServiceUrl();
-  private userAgent = "@gremlin/gremlin-mcp/2.5.0";
+  private userAgent = "@gremlin/gremlin-mcp/2.6.0";
 
   /**
    * Response cache, keyed on URL alone.
@@ -344,15 +350,14 @@ export class GremlinApi {
 
   async getTeam(teamId: string): Promise<Team> {
     assertRequiredParams(Boolean(teamId), 'teamId is required to fetch the team details.');
-    return this.jsonRequestWithRetry<Team>(`teams/${teamId}`, {
+    // The endpoint is `teams/{teamIdOrName}` and returns an array, even for an ID.
+    const [team] = await this.jsonRequestWithRetry<Team[]>(`teams/${encodeURIComponent(teamId)}`, {
       method: 'GET',
     });
-  }
-
-  async listTeamsForCompany(): Promise<Team[]> {
-    return this.jsonRequestWithRetry<Team[]>('teams', {
-      method: 'GET',
-    });
+    if (!team) {
+      throw new GremlinApiError(`No team found for ${teamId}`, { isInputError: true, statusCode: 404 });
+    }
+    return team;
   }
 
   async listServicesForTeam(teamId: string): Promise<Page<Service>> {

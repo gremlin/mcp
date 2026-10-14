@@ -117,3 +117,49 @@ describe('registerTools — error → CallToolResult wiring', () => {
     expect((result as any).structuredContent).toBeUndefined();
   });
 });
+
+describe('team tools', () => {
+  const fullTeam = {
+    identifier: 'team-1',
+    name: 'Team One',
+    company_id: 'company-1',
+    production: true,
+    created_at: '2024-01-01T00:00:00Z',
+    state: 'ACTIVE',
+    certificate: '-----BEGIN CERTIFICATE-----...',
+    prefs: { some: 'pref' },
+    client_versions: { linux: '2.0.0' },
+  };
+
+  it('list_teams returns only the summary fields', async () => {
+    const { fake, get } = makeFakeServer();
+    registerTools(fake as any, { listTeams: vi.fn().mockResolvedValue([fullTeam]) } as any);
+
+    const result = await get('list_teams')({}, {});
+
+    expect(JSON.parse(result.content[0].text!)).toEqual([
+      { identifier: 'team-1', name: 'Team One', production: true, created_at: '2024-01-01T00:00:00Z' },
+    ]);
+  });
+
+  it('get_team returns the full team', async () => {
+    const { fake, get } = makeFakeServer();
+    const getTeam = vi.fn().mockResolvedValue(fullTeam);
+    registerTools(fake as any, { getTeam } as any);
+
+    const result = await get('get_team')({ teamId: 'team-1' }, {});
+
+    expect(getTeam).toHaveBeenCalledWith('team-1');
+    expect(JSON.parse(result.content[0].text!)).toEqual(fullTeam);
+  });
+
+  it('get_team rejects a missing teamId as an input error', async () => {
+    const { fake, get } = makeFakeServer();
+    registerTools(fake as any, {} as any);
+
+    const result = await get('get_team')({}, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({ isInputError: true });
+  });
+});
