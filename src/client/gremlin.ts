@@ -447,7 +447,9 @@ export class GremlinApi {
     const params: Record<string, any> = { teamId, serviceId, pageSize: limit };
     if (dependencyId) params.dependencyId = dependencyId;
 
-    const path = testId ? `reliability-tests/${testId}/runs` : `reliability-tests/runs`;
+    // The plain run endpoints refuse OAuth tokens (run graphs carry unmasked status-check
+    // credentials). The /delegate twins mask them and accept both OAuth and API keys.
+    const path = testId ? `reliability-tests/${testId}/runs/delegate` : `reliability-tests/runs/delegate`;
 
     return this.jsonRequestWithRetry<Page<ReliabilityTestRun> | ReliabilityTestRun>(path, {
       method: 'GET',
@@ -465,8 +467,9 @@ export class GremlinApi {
       'reliabilityTestId, teamId, and serviceId are required to run a reliability test.',
     );
 
+    // /delegate for the same reason as getReliabilityExperiment.
     return this.jsonRequestWithRetry<ReliabilityTestRun>(
-      `reliability-tests/${reliabilityTestId}/runs`,
+      `reliability-tests/${reliabilityTestId}/runs/delegate`,
       {
         method: 'POST',
         params: { teamId },
