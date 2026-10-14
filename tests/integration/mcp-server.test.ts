@@ -264,7 +264,7 @@ describe.skipIf(SKIP)('MCP server integration', () => {
     const activeRunResult = await client.callTool({
       name: 'read_gremlin_api',
       arguments: {
-        path: '/reliability-tests/runs',
+        path: '/reliability-tests/runs/delegate',
         queryParams: { teamId: teamId!, serviceId: serviceId!, pageSize: '1' },
       },
     }) as ToolResult;

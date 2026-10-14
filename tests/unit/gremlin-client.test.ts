@@ -263,6 +263,41 @@ describe('GremlinApi typed methods (JSON-only endpoints)', () => {
   });
 });
 
+// The plain reliability-test run endpoints refuse OAuth tokens with a 403, so the hosted connector
+// only works if these methods hit the /delegate twins.
+describe('GremlinApi reliability-test run endpoints use /delegate', () => {
+  let api: GremlinApi;
+
+  beforeEach(() => {
+    api = new GremlinApi(TEST_CREDENTIAL);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(200, '{"items":[]}')));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function requestedPath(): string {
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    return new URL(String(url)).pathname;
+  }
+
+  it('lists all runs for a service via /reliability-tests/runs/delegate', async () => {
+    await api.getReliabilityExperiment('svc', 'team');
+    expect(requestedPath()).toMatch(/\/reliability-tests\/runs\/delegate$/);
+  });
+
+  it('lists runs for one test via /reliability-tests/{id}/runs/delegate', async () => {
+    await api.getReliabilityExperiment('svc', 'team', undefined, 'latency-test');
+    expect(requestedPath()).toMatch(/\/reliability-tests\/latency-test\/runs\/delegate$/);
+  });
+
+  it('starts a run via POST /reliability-tests/{id}/runs/delegate', async () => {
+    await api.runReliabilityTest('latency-test', 'team', { serviceId: 'svc' });
+    expect(requestedPath()).toMatch(/\/reliability-tests\/latency-test\/runs\/delegate$/);
+  });
+});
+
 // These exercise the structural marker directly (not just message text), since
 // that's what any future programmatic consumer — e.g. structuredContent, or a
 // central catch block — would actually read. Every GremlinApi failure mode
