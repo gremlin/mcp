@@ -180,6 +180,28 @@ describe('GremlinApi typed methods (JSON-only endpoints)', () => {
     expect(teams).toEqual([{ identifier: 'team-1', name: 'Team One' }]);
   });
 
+  it('getTeam unwraps the single-element array the API returns', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockResponse(200, '[{"identifier":"team-1","name":"Team One"}]', {
+        'content-type': 'application/json',
+      }),
+    );
+
+    expect(await api.getTeam('team-1')).toEqual({ identifier: 'team-1', name: 'Team One' });
+  });
+
+  it('getTeam classifies an empty array as a not-found input error', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockResponse(200, '[]', { 'content-type': 'application/json' }),
+    );
+
+    await expect(api.getTeam('team-1')).rejects.toMatchObject({
+      name: 'GremlinApiError',
+      isInputError: true,
+      statusCode: 404,
+    });
+  });
+
   // jsonRequestWithRetry delegates to fetchWithRetry for the actual network
   // attempt(s), so a 5xx (or a network-level failure — see the equivalent
   // test on execute() above) must retry through a typed method exactly the

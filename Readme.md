@@ -264,7 +264,11 @@ Add the following to your MCP settings:
 ### Teams
 
 #### `list_teams`
-Lists all teams you have access to. Nearly every other tool requires a `teamId`, and this is how to find one.
+Lists all teams you have access to. Nearly every other tool requires a `teamId`, and this is how to find one. Returns a summary per team: `identifier`, `name`, `production`, `created_at`.
+
+#### `get_team`
+Fetches the full details of a single team (state, preferences, client versions, certificate metadata, etc.).
+- **Parameters:** `teamId` (required)
 
 ### Service Management
 
