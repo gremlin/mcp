@@ -24,6 +24,8 @@ export interface TokenExchangeConfig {
   readonly clientSecret: string;
   /** The audience to request, i.e. the Gremlin API. */
   readonly targetResource: string;
+  /** How long to wait for the token endpoint before reporting it unavailable. */
+  readonly timeoutMs: number;
 }
 
 /**
@@ -89,6 +91,7 @@ export class TokenExchanger {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body,
+        signal: AbortSignal.timeout(this.config.timeoutMs),
       });
     } catch {
       // A transport failure says nothing about the token; reporting it as invalid would

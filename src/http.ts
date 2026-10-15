@@ -6,6 +6,7 @@ import {
   getAuthorizationServer,
   getExchangeClientCredentials,
   getResourceIdentifier,
+  getTokenExchangeTimeoutMs,
 } from './auth/protected-resource';
 import { TokenExchanger } from './auth/token-exchange';
 
@@ -35,6 +36,7 @@ const exchanger = new TokenExchanger({
   clientId,
   clientSecret,
   targetResource: getApiResourceIdentifier(),
+  timeoutMs: getTokenExchangeTimeoutMs(),
 });
 
 const app = createMcpHttpApp({

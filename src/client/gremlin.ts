@@ -1,5 +1,5 @@
 import TTLCache from '@isaacs/ttlcache';
-import { getServiceUrl } from '../config';
+import { getApiTimeoutMs, getServiceUrl } from '../config';
 import { authorizationHeader, type GremlinCredential } from '../auth/credential';
 
 
@@ -308,9 +308,33 @@ function buildHttpError(status: number, body: string): GremlinApiError {
   return new GremlinApiError(`${base}${guidance}`, { isInputError, statusCode: status, noRetry });
 }
 
+const MAX_ATTEMPTS = 3;
+const BACKOFF_BASE_MS = 500;
+
+// RFC 9110 §9.2.2: sending one of these twice has the same effect as sending it once.
+const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']);
+
+// Full jitter, so callers that failed together don't retry together.
+function backoffMs(attempt: number): number {
+  return Math.random() * BACKOFF_BASE_MS * 2 ** (attempt - 1);
+}
+
+interface RawResponse {
+  status: number;
+  contentType: string | null;
+  text: string;
+}
+
+type RequestOptions = RequestInit & {
+  params?: Record<string, any>;
+  /** Overrides the method's default, e.g. for a POST that only reads. */
+  idempotent?: boolean;
+};
+
 export class GremlinApi {
   private baseUrl: string = getServiceUrl();
-  private userAgent = "@gremlin/gremlin-mcp/2.5.0";
+  private timeoutMs = getApiTimeoutMs();
+  private userAgent = "@gremlin/gremlin-mcp/2.6.0";
 
   /**
    * Response cache, keyed on URL alone.
@@ -574,6 +598,7 @@ export class GremlinApi {
       params: { teamId },
       body: JSON.stringify(selector),
       skipCache: true, // preview endpoint — always reflect current container state
+      idempotent: true,
     });
   }
 
@@ -598,36 +623,21 @@ export class GremlinApi {
     queryParams?: Record<string, string>,
     body?: Record<string, unknown>,
   ): Promise<GremlinApiResult> {
-    const response = await this.fetchWithRetry(path, {
+    const { status, contentType, text } = await this.fetchWithRetry(path, {
       method: method.toUpperCase(),
       params: queryParams,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
 
-    const contentType = response.headers.get('content-type');
-    let text: string;
-    try {
-      text = await response.text();
-    } catch (error) {
-      // The request itself succeeded (2xx); this is a failure to read the
-      // body afterward (e.g. a connection reset mid-stream) — not something
-      // the caller's arguments could have caused.
-      throw new GremlinApiError(
-        `Failed to read the Gremlin API response body: ${error instanceof Error ? error.message : String(error)}. ` +
-        'This is not caused by your input — do not retry with different arguments; report the failure instead.',
-        { isInputError: false, statusCode: response.status },
-      );
-    }
-
     if (isJsonContentTypeHeader(contentType)) {
       try {
-        return { status: response.status, contentType, isJsonBody: true, body: JSON.parse(text) };
+        return { status, contentType, isJsonBody: true, body: JSON.parse(text) };
       } catch (e) {
         console.error(`GremlinApi#execute: labeled JSON but not parseable: falling back to raw text: ${e}`);
       }
     }
 
-    return { status: response.status, contentType, isJsonBody: false, body: text };
+    return { status, contentType, isJsonBody: false, body: text };
   }
 
   private buildUrl(path: string, params?: Record<string, any>): string {
@@ -639,14 +649,11 @@ export class GremlinApi {
   }
 
   /**
-   * Makes a single fetch attempt (no retry) and returns the raw `ok`
-   * response, doing no body-reading or parsing. The single attempt inside
+   * Makes a single attempt (no retry) and reads the whole body, so the timeout covers a response
+   * that stalls mid-stream as well as one that never starts. The single attempt inside
    * `fetchWithRetry`'s loop.
    */
-  private async fetchOnce(
-    path: string,
-    options: RequestInit & { params?: Record<string, any> } = {},
-  ): Promise<Response> {
+  private async fetchOnce(path: string, options: RequestOptions = {}): Promise<RawResponse> {
     const { params, ...fetchOptions } = options;
     const urlString = this.buildUrl(path, params);
 
@@ -658,53 +665,66 @@ export class GremlinApi {
             'User-Agent': this.userAgent,
             ...fetchOptions.headers,
         },
+        signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       throw buildHttpError(response.status, body);
     }
-    return response;
+
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      throw new GremlinApiError(
+        `Failed to read the Gremlin API response body: ${this.describeFailure(error)}. ` +
+        `The request itself succeeded (HTTP ${response.status}); this is not caused by your input, ` +
+        'so report the failure rather than sending it again.',
+        { isInputError: false, statusCode: response.status },
+      );
+    }
+    return { status: response.status, contentType: response.headers.get('content-type'), text };
   }
 
-  // A GremlinApiError from fetchOnce (via buildHttpError) is already
-  // classified; anything else is a transport-level failure (DNS, connection
-  // reset, timeout) that never reached api.gremlin.com at all — not something
-  // the caller's arguments could have caused, so it's classified the same
-  // way rather than letting a bare, unlabeled error reach the tool-calling
-  // model.
-  private classifyRetryError(error: unknown): GremlinApiError {
+  private describeFailure(error: unknown): string {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      return `timed out after ${this.timeoutMs / 1000}s`;
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  // Anything not already a GremlinApiError is a transport failure (DNS, reset, timeout): not the
+  // caller's fault, but the request may still have reached the API.
+  private classifyFailure(error: unknown, idempotent: boolean): GremlinApiError {
     if (error instanceof GremlinApiError) return error;
     return new GremlinApiError(
-      `Network error calling the Gremlin API: ${error instanceof Error ? error.message : String(error)}. ` +
-      'This is not caused by your input — do not retry with different arguments; report the failure instead.',
+      `Network error calling the Gremlin API: ${this.describeFailure(error)}. ` +
+      (idempotent
+        ? 'This is not caused by your input — do not retry with different arguments; report the failure instead.'
+        : 'The request may still have been applied; check whether it took effect before sending it again.'),
       { isInputError: false },
     );
   }
 
   /**
-   * Fetches with retry and returns the raw `ok` response, doing no parsing.
+   * Fetches with retry and returns the status, content type and body text, doing no parsing.
    * Used by `execute`, which must not assume a JSON body.
+   *
+   * Only idempotent requests are retried: a POST that timed out may still have been applied, and
+   * sending it again could, say, start a second reliability test.
    */
-  private async fetchWithRetry(
-    path: string,
-    options: RequestInit & {
-      params?: Record<string, any>;
-      maxRetries?: number;
-    } = {},
-  ): Promise<Response> {
-    const { maxRetries = 3, ...rest } = options;
+  private async fetchWithRetry(path: string, options: RequestOptions = {}): Promise<RawResponse> {
+    const { idempotent = IDEMPOTENT_METHODS.has((options.method ?? 'GET').toUpperCase()), ...rest } = options;
 
-    let lastError: GremlinApiError | null = null;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
+    for (let attempt = 1; ; attempt++) {
       try {
         return await this.fetchOnce(path, rest);
       } catch (error) {
-        lastError = this.classifyRetryError(error);
-        if (lastError.noRetry) break;
+        const failure = this.classifyFailure(error, idempotent);
+        if (!idempotent || failure.noRetry || attempt >= MAX_ATTEMPTS) throw failure;
       }
+      await new Promise(resolve => setTimeout(resolve, backoffMs(attempt)));
     }
-
-    throw lastError;
   }
 
   /**
@@ -723,11 +743,7 @@ export class GremlinApi {
    */
   private async jsonRequestWithRetry<T>(
     path: string,
-    options: RequestInit & {
-      params?: Record<string, any>;
-      maxRetries?: number;
-      skipCache?: boolean;
-    } = {},
+    options: RequestOptions & { skipCache?: boolean } = {},
   ): Promise<T> {
     const { params, skipCache = false, ...rest } = options;
     const urlString = this.buildUrl(path, params);
@@ -736,8 +752,7 @@ export class GremlinApi {
       return this.cache.get(urlString) as T;
     }
 
-    const response = await this.fetchWithRetry(path, { params, ...rest });
-    const text = await response.text();
+    const { status, text } = await this.fetchWithRetry(path, { params, ...rest });
 
     let data: T;
     try {
@@ -745,9 +760,9 @@ export class GremlinApi {
     } catch {
       const preview = text.slice(0, 500);
       throw new GremlinApiError(
-        `Expected a JSON response body from the Gremlin API but received (HTTP ${response.status})` +
+        `Expected a JSON response body from the Gremlin API but received (HTTP ${status})` +
         `${preview ? `: ${preview}` : ' an empty body'}. This is not caused by your input — do not retry with different arguments; report the failure instead.`,
-        { isInputError: false, statusCode: response.status },
+        { isInputError: false, statusCode: status },
       );
     }
 

@@ -13,6 +13,22 @@ function mockResponse(status: number, body: string, headers: Record<string, stri
   };
 }
 
+// A fetch that never answers on its own, only rejecting once the request's own timeout fires.
+function hangUntilAborted(_url: string, init: RequestInit): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+  });
+}
+
+// No delay between retries unless a test is about the backoff itself.
+beforeEach(() => {
+  vi.spyOn(Math, 'random').mockReturnValue(0);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('isJsonContentTypeHeader', () => {
   it('is true for application/json', () => {
     expect(isJsonContentTypeHeader('application/json')).toBe(true);
@@ -330,5 +346,103 @@ describe('GremlinApiError classification', () => {
     // rather than one where the call never went out, is not — see the 4xx
     // noRetry test above), so this should exhaust all 3 attempts.
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('GremlinApi timeouts and retries', () => {
+  let api: GremlinApi;
+
+  beforeEach(() => {
+    process.env.GREMLIN_API_TIMEOUT_SECONDS = '0.02';
+    api = new GremlinApi(TEST_CREDENTIAL);
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    delete process.env.GREMLIN_API_TIMEOUT_SECONDS;
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('times out an attempt that gets no response, retrying it when the request is idempotent', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(hangUntilAborted);
+
+    const error: unknown = await api.execute('GET', 'services').catch(e => e);
+
+    expect(error).toBeInstanceOf(GremlinApiError);
+    expect((error as GremlinApiError).isInputError).toBe(false);
+    expect((error as Error).message).toMatch(/Network error calling the Gremlin API: timed out after 0.02s/);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('times out a response whose body stalls after the headers arrive', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init: RequestInit) => ({
+      ...mockResponse(200, '', { 'content-type': 'application/json' }),
+      text: () => hangUntilAborted(url, init),
+    }));
+
+    const error: unknown = await api.execute('GET', 'services').catch(e => e);
+
+    expect((error as Error).message).toMatch(/Failed to read the Gremlin API response body: timed out after 0.02s/);
+    expect((error as GremlinApiError).statusCode).toBe(200);
+  });
+
+  // The reason POSTs are not retried: run_reliability_test sent twice starts two tests.
+  it('sends a POST once after a timeout and says it may have been applied', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(hangUntilAborted);
+
+    const error: unknown = await api.runReliabilityTest('rt-1', 'team-1', { serviceId: 'svc-1' }).catch(e => e);
+
+    expect((error as Error).message).toMatch(/timed out after 0.02s.*may still have been applied/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a POST once after a network error or a 5xx', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new TypeError('fetch failed'));
+    await expect(api.execute('POST', 'scenarios')).rejects.toThrow(/may still have been applied/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    (fetch as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(mockResponse(503, 'unavailable'));
+    await expect(api.execute('PATCH', 'scenarios/abc')).rejects.toThrow(/HTTP 503/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries PUT and DELETE, which are idempotent', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new TypeError('fetch failed'));
+
+    await expect(api.execute('DELETE', 'attacks/abc')).rejects.toThrow(/do not retry with different arguments/);
+    await expect(api.execute('PUT', 'scenarios/abc')).rejects.toThrow(/do not retry with different arguments/);
+    expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
+  it('retries a POST that only reads', async () => {
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(mockResponse(503, 'unavailable'))
+      .mockResolvedValueOnce(mockResponse(200, '{"count":2}', { 'content-type': 'application/json' }));
+
+    expect(await api.matchContainers('team-1', { isAll: true })).toEqual({ count: 2 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('backs off exponentially, with jitter, between attempts', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(mockResponse(503, 'unavailable'))
+      .mockResolvedValueOnce(mockResponse(503, 'unavailable'))
+      .mockResolvedValueOnce(mockResponse(200, '[]', { 'content-type': 'application/json' }));
+
+    const teams = api.listTeams();
+
+    // Half of 500ms before the second attempt, then half of 1000ms before the third.
+    await vi.advanceTimersByTimeAsync(249);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(await teams).toEqual([]);
   });
 });

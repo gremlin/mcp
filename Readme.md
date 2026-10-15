@@ -48,6 +48,7 @@ server, and nothing in the hosted column is read by the stdio server.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
+| `GREMLIN_API_TIMEOUT_SECONDS` | No | `15` | Per-attempt timeout for Gremlin API calls. Idempotent requests get up to 3 attempts. |
 
 **stdio — API key** (`build/main.mjs`)
 
@@ -64,6 +65,7 @@ server, and nothing in the hosted column is read by the stdio server.
 | `GREMLIN_MCP_OAUTH_CLIENT_SECRET` | **Yes** | — | The matching secret. Belongs in a secret store, not in a manifest. Printed once at registration and not recoverable afterwards. |
 | `GREMLIN_API_RESOURCE_URL` | No | `https://api.gremlin.com` | The audience this server asks for when exchanging — the Gremlin API. Distinct from `GREMLIN_MCP_RESOURCE_URL`, which is this server: tokens arrive audienced for this server and are exchanged for one audienced at the API. |
 | `GREMLIN_AUTHORIZATION_SERVER` | No | `https://api.gremlin.com` | The authorization server that issues tokens for this resource. |
+| `GREMLIN_MCP_TOKEN_EXCHANGE_TIMEOUT_SECONDS` | No | `5` | Token exchange timeout; exceeding it returns `503`. |
 | `PORT` | No | `8080` | HTTP listen port. |
 | `GREMLIN_MCP_MAX_SESSIONS` | No | `2000` | Ceiling on concurrent sessions; new ones get `503` beyond it. |
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE` | No | `20` | Per-source cap on session creation; excess gets `429`. Reusing a session is not counted. Source is the rightmost globally-routable `X-Forwarded-For` hop, so a private load-balancer hop does not collapse every caller into one bucket. |

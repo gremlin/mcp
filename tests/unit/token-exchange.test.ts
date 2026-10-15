@@ -13,6 +13,7 @@ describe('TokenExchanger', () => {
     clientId: 'gremlin_oid_mcp',
     clientSecret: 'shhh',
     targetResource: 'https://api.gremlin.com',
+    timeoutMs: 5_000,
   };
   const SUBJECT = 'gremlin_oat_user_token';
 
@@ -140,6 +141,25 @@ describe('TokenExchanger', () => {
     );
 
     expect(await new TokenExchanger(CONFIG).exchange(SUBJECT)).toEqual({
+      ok: false,
+      reason: 'unavailable',
+    });
+  });
+
+  it('reports a token endpoint that does not answer in time as unavailable', async () => {
+    // A timeout says nothing about the token either, and without one a stalled authorization
+    // server would hold every new session open indefinitely.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          }),
+      ),
+    );
+
+    expect(await new TokenExchanger({ ...CONFIG, timeoutMs: 20 }).exchange(SUBJECT)).toEqual({
       ok: false,
       reason: 'unavailable',
     });

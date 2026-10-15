@@ -1,3 +1,5 @@
+import { durationFromEnv } from '../config';
+
 /**
  * RFC 9728 protected resource metadata, and the challenges that point clients at it.
  *
@@ -7,6 +9,7 @@
  */
 
 const DEFAULT_AUTHORIZATION_SERVER = 'https://api.gremlin.com';
+const DEFAULT_TOKEN_EXCHANGE_TIMEOUT_MS = 5_000;
 
 export const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
 
@@ -171,6 +174,11 @@ export function getExchangeClientCredentials(): { clientId: string; clientSecret
     );
   }
   return { clientId, clientSecret };
+}
+
+/** How long to wait for the token endpoint before reporting the authorization server unavailable. */
+export function getTokenExchangeTimeoutMs(): number {
+  return durationFromEnv('GREMLIN_MCP_TOKEN_EXCHANGE_TIMEOUT_SECONDS', DEFAULT_TOKEN_EXCHANGE_TIMEOUT_MS);
 }
 
 /**
