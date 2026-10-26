@@ -89,8 +89,14 @@ export function startTelemetry(): () => Promise<void> {
       ],
     });
     metrics.setGlobalMeterProvider(provider);
-    recordRuntimeMetrics(provider.getMeter(RUNTIME_METER_NAME));
-    return () => provider.shutdown();
+    const stopRuntimeMetrics = recordRuntimeMetrics(provider.getMeter(RUNTIME_METER_NAME));
+    return async () => {
+      try {
+        await provider.shutdown();
+      } finally {
+        stopRuntimeMetrics();
+      }
+    };
   } catch (err) {
     diag.error('Telemetry is off: its configuration could not be used', err);
     return off;
@@ -136,8 +142,10 @@ function stderrLogger(): DiagLogger {
  *
  * <p>Read directly from `perf_hooks` and `v8`. `@opentelemetry/instrumentation-runtime-node` reports
  * the same, but its base class bundles module-patching code that fails to load in this ESM bundle.
+ *
+ * @returns a function that stops sampling; call it after the final export
  */
-function recordRuntimeMetrics(meter: Meter): void {
+function recordRuntimeMetrics(meter: Meter): () => void {
   const delay = monitorEventLoopDelay();
   delay.enable();
   const percentiles = EVENT_LOOP_DELAY_PERCENTILES.map((p) => ({
@@ -170,4 +178,6 @@ function recordRuntimeMetrics(meter: Meter): void {
       result.observe(space.space_used_size, { 'v8js.heap.space.name': space.space_name });
     }
   });
+
+  return () => delay.disable();
 }

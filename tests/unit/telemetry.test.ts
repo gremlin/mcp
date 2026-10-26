@@ -8,19 +8,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SERVICE_NAME, startTelemetry } from '../../src/telemetry';
 import { SERVER_VERSION } from '../../src/server';
 
-const ENV = [
-  'GREMLIN_MCP_ENABLE_TELEMETRY',
-  'OTEL_SDK_DISABLED',
-  'OTEL_METRICS_EXPORTER',
-  'OTEL_EXPORTER_OTLP_ENDPOINT',
-  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
-  'OTEL_EXPORTER_OTLP_PROTOCOL',
-  'OTEL_EXPORTER_OTLP_METRICS_PROTOCOL',
-  'OTEL_METRIC_EXPORT_INTERVAL',
-  'OTEL_METRIC_EXPORT_TIMEOUT',
-  'OTEL_SERVICE_NAME',
-  'OTEL_LOG_LEVEL',
-];
 
 interface Export {
   path: string | undefined;
@@ -68,8 +55,10 @@ describe('startTelemetry', () => {
   let collector: Awaited<ReturnType<typeof startCollector>>;
 
   beforeEach(async () => {
-    // Isolate from whatever OTEL_* configuration the machine running the tests has.
-    for (const name of ENV) vi.stubEnv(name, '');
+    // Isolate from whatever telemetry configuration the machine running the tests has.
+    for (const name of Object.keys(process.env)) {
+      if (name.startsWith('OTEL_') || name === 'GREMLIN_MCP_ENABLE_TELEMETRY') vi.stubEnv(name, '');
+    }
     collector = await startCollector();
     vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', collector.endpoint);
   });

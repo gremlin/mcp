@@ -61,9 +61,11 @@ httpServer.listen(port, () => {
 
 async function shutdown(): Promise<void> {
   clearInterval(reaper);
+  // Stop accepting first, so no session can open after closeAll has run.
+  const closed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
   await app.closeAll();
-  await stopTelemetry();
-  httpServer.close(() => process.exit(0));
+  await Promise.all([closed, stopTelemetry()]);
+  process.exit(0);
 }
 
 process.on('SIGTERM', () => void shutdown());
