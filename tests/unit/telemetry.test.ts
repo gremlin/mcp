@@ -14,7 +14,14 @@ interface Export {
   contentType: string | undefined;
   // Decoded only for http/json.
   resource?: Record<string, unknown>;
-  metricNames?: string[];
+  metrics?: Record<string, OtlpMetric>;
+}
+
+/** The OTLP data kind each metric was exported as. */
+interface OtlpMetric {
+  name: string;
+  gauge?: object;
+  sum?: { isMonotonic?: boolean };
 }
 
 /** A stand-in OTLP/HTTP collector that keeps what it is sent. */
@@ -33,8 +40,10 @@ async function startCollector() {
             Object.values(a.value)[0],
           ]),
         );
-        received.metricNames = rm.scopeMetrics.flatMap((s: { metrics: { name: string }[] }) =>
-          s.metrics.map((m) => m.name),
+        received.metrics = Object.fromEntries(
+          rm.scopeMetrics.flatMap((s: { metrics: OtlpMetric[] }) =>
+            s.metrics.map((m) => [m.name, m]),
+          ),
         );
       }
       exports.push(received);
@@ -94,13 +103,10 @@ describe('startTelemetry', () => {
       'service.name': SERVICE_NAME,
       'service.version': SERVER_VERSION,
     });
-    expect(exported.metricNames).toEqual(
-      expect.arrayContaining([
-        'nodejs.eventloop.delay.p99',
-        'nodejs.eventloop.utilization',
-        'v8js.memory.heap.used',
-      ]),
-    );
+    // Instrument types follow the semantic conventions: gauges, except heap used.
+    expect(exported.metrics?.['nodejs.eventloop.delay.p99']).toHaveProperty('gauge');
+    expect(exported.metrics?.['nodejs.eventloop.utilization']).toHaveProperty('gauge');
+    expect(exported.metrics?.['v8js.memory.heap.used']?.sum).toMatchObject({ isMonotonic: false });
   });
 
   it('defaults to OTLP over HTTP/protobuf', async () => {

@@ -51,4 +51,4 @@ All carry the `service.name` and `service.version` resource attributes.
 | `nodejs.eventloop.delay.p99` | Gauge | `s` | | Event loop delay, 99th percentile, since the previous export |
 | `nodejs.eventloop.delay.max` | Gauge | `s` | | Maximum event loop delay since the previous export |
 | `nodejs.eventloop.utilization` | Gauge | `1` | | Share of time the event loop was busy since the previous export, 0 to 1 |
-| `v8js.memory.heap.used` | Gauge | `By` | `v8js.heap.space.name` | Heap used, per V8 heap space |
+| `v8js.memory.heap.used` | UpDownCounter | `By` | `v8js.heap.space.name` | Heap used, per V8 heap space |

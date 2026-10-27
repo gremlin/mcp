@@ -173,7 +173,7 @@ function recordRuntimeMetrics(meter: Meter): () => void {
     previous = current;
   });
 
-  meter.createObservableGauge('v8js.memory.heap.used', { unit: 'By' }).addCallback((result) => {
+  meter.createObservableUpDownCounter('v8js.memory.heap.used', { unit: 'By' }).addCallback((result) => {
     for (const space of getHeapSpaceStatistics()) {
       result.observe(space.space_used_size, { 'v8js.heap.space.name': space.space_name });
     }
