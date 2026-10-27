@@ -20,6 +20,7 @@ import {
 import type { GremlinCredential } from '../../src/auth/credential';
 import { createGremlinMcpServer } from '../../src/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { collectMetrics } from './metric-reader';
 
 const RESOURCE = 'https://mcp.gremlin.com';
 const TOKEN_A = 'gremlin_oat_user_a';
@@ -594,6 +595,119 @@ describe('MCP HTTP app', () => {
       vi.useRealTimers();
 
       expect(harness.app.sessionCount()).toBe(0);
+    });
+  });
+
+  describe('metrics', () => {
+    const ALLOWED_ATTRIBUTES = [
+      'mcp.method.name',
+      'mcp.protocol.version',
+      'gen_ai.tool.name',
+      'gen_ai.operation.name',
+      'error.type',
+      'rpc.response.status_code',
+      'network.transport',
+      'network.protocol.name',
+      'gremlin.mcp.rejection.reason',
+      'gremlin.mcp.source.trusted',
+      'gremlin.mcp.session.end_reason',
+    ];
+
+    let collected: ReturnType<typeof collectMetrics>;
+
+    beforeEach(() => {
+      collected = collectMetrics();
+    });
+
+    afterEach(() => collected.stop());
+
+    function deleteSession(origin: string, sessionId: string) {
+      return fetch(`${origin}/mcp`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${TOKEN_A}`, 'mcp-session-id': sessionId },
+      });
+    }
+
+    async function sessionEnds() {
+      return (await collected.points('mcp.server.session.duration')).map((point) => ({
+        reason: point.attributes['gremlin.mcp.session.end_reason'],
+        count: (point.value as { count: number }).count,
+      }));
+    }
+
+    it('counts each rejection by reason and whether the source is trusted', async () => {
+      process.env.GREMLIN_MCP_TRUSTED_SOURCE_CIDRS = '203.0.113.0/24';
+      harness = await startApp();
+
+      await mcpRequest(harness.origin, {});
+      await fetch(`${harness.origin}/mcp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.70' },
+        body: JSON.stringify(INITIALIZE),
+      });
+      await mcpRequest(harness.origin, { token: TOKEN_A, sessionId: 'never-issued' });
+
+      const rejections = (await collected.points('gremlin.mcp.requests.rejected')).map((point) => ({
+        ...point.attributes,
+        count: point.value,
+      }));
+      expect(rejections).toEqual(
+        expect.arrayContaining([
+          { 'gremlin.mcp.rejection.reason': 'no_token', 'gremlin.mcp.source.trusted': false, count: 1 },
+          { 'gremlin.mcp.rejection.reason': 'no_token', 'gremlin.mcp.source.trusted': true, count: 1 },
+          {
+            'gremlin.mcp.rejection.reason': 'session_not_found',
+            'gremlin.mcp.source.trusted': false,
+            count: 1,
+          },
+        ]),
+      );
+    });
+
+    it('tracks active sessions and records how each one ended', async () => {
+      harness = await startApp();
+
+      const closing = await mcpRequest(harness.origin, { token: TOKEN_A });
+      await mcpRequest(harness.origin, { token: TOKEN_A });
+      await mcpRequest(harness.origin, { token: TOKEN_A });
+      const [active] = await collected.points('gremlin.mcp.sessions.active');
+      expect(active.value).toBe(3);
+
+      await deleteSession(harness.origin, closing.headers.get('mcp-session-id')!);
+      vi.setSystemTime(Date.now() + 31 * 60 * 1000);
+      await mcpRequest(harness.origin, { token: TOKEN_A });
+      harness.app.reapIdleSessions();
+      vi.useRealTimers();
+      await harness.app.closeAll();
+
+      expect((await collected.points('gremlin.mcp.sessions.active'))[0].value).toBe(0);
+      expect(await sessionEnds()).toEqual(
+        expect.arrayContaining([
+          { reason: 'closed', count: 1 },
+          { reason: 'reaped', count: 2 },
+          { reason: 'shutdown', count: 1 },
+        ]),
+      );
+    });
+
+    it('labels no metric with a user, company, session id or token', async () => {
+      harness = await startApp(credentialReportingServer);
+
+      const initialized = await mcpRequest(harness.origin, { token: TOKEN_A });
+      const sessionId = initialized.headers.get('mcp-session-id')!;
+      await rpcBody(await mcpRequest(harness.origin, { token: TOKEN_A, sessionId, body: callWhoami(2) }));
+      await mcpRequest(harness.origin, {});
+      await deleteSession(harness.origin, sessionId);
+
+      const attributes = await collected.attributes();
+      expect(attributes.length).toBeGreaterThan(0);
+      for (const recorded of attributes) {
+        expect(ALLOWED_ATTRIBUTES).toEqual(expect.arrayContaining(Object.keys(recorded)));
+        const values = JSON.stringify(Object.values(recorded));
+        for (const identifying of [TOKEN_A, `subject-for-${TOKEN_A}`, sessionId]) {
+          expect(values).not.toContain(identifying);
+        }
+      }
     });
   });
 });

@@ -1,0 +1,185 @@
+import { metrics, type Attributes } from '@opentelemetry/api';
+import {
+  ATTR_ERROR_TYPE,
+  ATTR_NETWORK_PROTOCOL_NAME,
+  ATTR_NETWORK_TRANSPORT,
+  NETWORK_TRANSPORT_VALUE_PIPE,
+  NETWORK_TRANSPORT_VALUE_TCP,
+} from '@opentelemetry/semantic-conventions';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import {
+  ErrorCode,
+  isJSONRPCErrorResponse,
+  isJSONRPCNotification,
+  isJSONRPCRequest,
+  isJSONRPCResultResponse,
+  type RequestId,
+} from '@modelcontextprotocol/sdk/types.js';
+
+const METER_NAME = 'gremlin-mcp';
+
+const OPERATION_DURATION = 'mcp.server.operation.duration';
+const SESSION_DURATION = 'mcp.server.session.duration';
+const SESSIONS_ACTIVE = 'gremlin.mcp.sessions.active';
+const REQUESTS_REJECTED = 'gremlin.mcp.requests.rejected';
+
+// The MCP semantic conventions' advice for both duration histograms.
+const DURATION_BUCKETS_S = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300];
+// Sessions idle out after 30 minutes, so most outlive the advised 300s top bucket.
+const SESSION_DURATION_BUCKETS_S = [...DURATION_BUCKETS_S, 600, 1800, 3600, 7200];
+
+// Development-status semantic conventions, copied rather than imported from the incubating entry
+// point, which can break in a minor release.
+const ATTR_MCP_METHOD_NAME = 'mcp.method.name';
+const ATTR_MCP_PROTOCOL_VERSION = 'mcp.protocol.version';
+const ATTR_GEN_AI_TOOL_NAME = 'gen_ai.tool.name';
+const ATTR_GEN_AI_OPERATION_NAME = 'gen_ai.operation.name';
+const ATTR_RPC_RESPONSE_STATUS_CODE = 'rpc.response.status_code';
+const GEN_AI_OPERATION_EXECUTE_TOOL = 'execute_tool';
+const ERROR_TYPE_TOOL_ERROR = 'tool_error';
+const OTHER = '_OTHER';
+
+const ATTR_REJECTION_REASON = 'gremlin.mcp.rejection.reason';
+const ATTR_SOURCE_TRUSTED = 'gremlin.mcp.source.trusted';
+const ATTR_SESSION_END_REASON = 'gremlin.mcp.session.end_reason';
+const ERROR_TYPE_CANCELLED = 'cancelled';
+
+const METHOD_INITIALIZE = 'initialize';
+const METHOD_TOOLS_CALL = 'tools/call';
+const NOTIFICATION_CANCELLED = 'notifications/cancelled';
+
+const MS_PER_SECOND = 1000;
+
+const TRANSPORT_ATTRIBUTES = {
+  http: { [ATTR_NETWORK_TRANSPORT]: NETWORK_TRANSPORT_VALUE_TCP, [ATTR_NETWORK_PROTOCOL_NAME]: 'http' },
+  stdio: { [ATTR_NETWORK_TRANSPORT]: NETWORK_TRANSPORT_VALUE_PIPE },
+} satisfies Record<string, Attributes>;
+
+/** Why a request to `/mcp` was refused before reaching an MCP session. */
+export type RejectionReason =
+  | 'origin_rejected'
+  | 'no_token'
+  | 'invalid_token'
+  | 'forbidden'
+  | 'throttled_validation'
+  | 'auth_unavailable'
+  | 'session_not_found'
+  | 'subject_mismatch'
+  | 'throttled_session'
+  | 'at_capacity';
+
+export type SessionEndReason = 'closed' | 'reaped' | 'shutdown';
+
+export type McpMetrics = ReturnType<typeof createMcpMetrics>;
+
+/**
+ * The MCP server's metrics, on the global meter provider.
+ *
+ * <p>Create after telemetry has started: an instrument made before a provider is registered stays
+ * a no-op. No attribute carries a user, company, session id or token.
+ */
+export function createMcpMetrics(transport: keyof typeof TRANSPORT_ATTRIBUTES) {
+  const transportAttributes: Attributes = TRANSPORT_ATTRIBUTES[transport];
+  const meter = metrics.getMeter(METER_NAME);
+  const operationDuration = meter.createHistogram(OPERATION_DURATION, {
+    unit: 's',
+    advice: { explicitBucketBoundaries: DURATION_BUCKETS_S },
+  });
+  const sessionDuration = meter.createHistogram(SESSION_DURATION, {
+    unit: 's',
+    advice: { explicitBucketBoundaries: SESSION_DURATION_BUCKETS_S },
+  });
+  const sessionsActive = meter.createUpDownCounter(SESSIONS_ACTIVE, { unit: '{session}' });
+  const requestsRejected = meter.createCounter(REQUESTS_REJECTED, { unit: '{request}' });
+
+  return {
+    rejected(reason: RejectionReason, trusted: boolean): void {
+      requestsRejected.add(1, { [ATTR_REJECTION_REASON]: reason, [ATTR_SOURCE_TRUSTED]: trusted });
+    },
+
+    sessionStarted(): void {
+      sessionsActive.add(1);
+    },
+
+    /** @param startedAt when the session started, from `performance.now()` */
+    sessionEnded(startedAt: number, reason: SessionEndReason): void {
+      sessionsActive.add(-1);
+      sessionDuration.record((performance.now() - startedAt) / MS_PER_SECOND, {
+        ...transportAttributes,
+        [ATTR_SESSION_END_REASON]: reason,
+      });
+    },
+
+    /**
+     * Records `mcp.server.operation.duration` for every request the transport receives, from
+     * arrival to response.
+     *
+     * <p>Measured at the transport rather than in the tool handlers, because the SDK answers an
+     * unknown tool or invalid arguments with a JSON-RPC error before any handler runs. Call after
+     * `server.connect(transport)`, which installs the handler wrapped here.
+     *
+     * @param isKnownTool whether a client-supplied tool name is registered; others become `_OTHER`
+     */
+    observeOperations(transport: Transport, isKnownTool: (name: string) => boolean): void {
+      const pending = new Map<RequestId, { startedAt: number; method: string; tool?: string }>();
+      let protocolVersion: string | undefined;
+
+      function finish(id: RequestId, outcome: Attributes): void {
+        const request = pending.get(id);
+        if (!request) return;
+        pending.delete(id);
+        operationDuration.record((performance.now() - request.startedAt) / MS_PER_SECOND, {
+          ...transportAttributes,
+          [ATTR_MCP_METHOD_NAME]: request.method,
+          ...(protocolVersion && { [ATTR_MCP_PROTOCOL_VERSION]: protocolVersion }),
+          ...(request.tool !== undefined && {
+            [ATTR_GEN_AI_TOOL_NAME]: request.tool,
+            [ATTR_GEN_AI_OPERATION_NAME]: GEN_AI_OPERATION_EXECUTE_TOOL,
+          }),
+          ...outcome,
+        });
+      }
+
+      const receive = transport.onmessage;
+      transport.onmessage = (message, extra) => {
+        if (isJSONRPCRequest(message)) {
+          const name = message.params?.name;
+          pending.set(message.id, {
+            startedAt: performance.now(),
+            method: message.method,
+            ...(message.method === METHOD_TOOLS_CALL && {
+              tool: typeof name === 'string' && isKnownTool(name) ? name : OTHER,
+            }),
+          });
+        } else if (isJSONRPCNotification(message) && message.method === NOTIFICATION_CANCELLED) {
+          // The SDK sends no response to a cancelled request.
+          const id = message.params?.requestId;
+          if (typeof id === 'string' || typeof id === 'number') {
+            finish(id, { [ATTR_ERROR_TYPE]: ERROR_TYPE_CANCELLED });
+          }
+        }
+        receive?.(message, extra);
+      };
+
+      const send = transport.send.bind(transport);
+      transport.send = (message, options) => {
+        if (isJSONRPCResultResponse(message)) {
+          const { result } = message;
+          if (pending.get(message.id)?.method === METHOD_INITIALIZE && typeof result.protocolVersion === 'string') {
+            protocolVersion = result.protocolVersion;
+          }
+          finish(message.id, result.isError === true ? { [ATTR_ERROR_TYPE]: ERROR_TYPE_TOOL_ERROR } : {});
+        } else if (isJSONRPCErrorResponse(message) && message.id !== undefined) {
+          const code = String(message.error.code);
+          finish(message.id, {
+            [ATTR_ERROR_TYPE]: code,
+            [ATTR_RPC_RESPONSE_STATUS_CODE]: code,
+            // A method nobody handles is whatever the client sent; keep it out of the labels.
+            ...(message.error.code === ErrorCode.MethodNotFound && { [ATTR_MCP_METHOD_NAME]: OTHER }),
+          });
+        }
+        return send(message, options);
+      };
+    },
+  };
+}

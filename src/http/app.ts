@@ -19,8 +19,15 @@ import {
   PROTECTED_RESOURCE_PATH,
 } from '../auth/protected-resource';
 import { GremlinApi, GremlinApiError } from '../client/gremlin';
+import { createMcpMetrics, type RejectionReason, type SessionEndReason } from '../metrics';
 import { createGremlinMcpServer } from '../server';
-import { positiveOr, SourceRateLimiter, trustedSourcesFrom } from './source-limits';
+import { isRegisteredTool } from '../tools/index';
+import {
+  isTrustedSource,
+  positiveOr,
+  SourceRateLimiter,
+  trustedSourcesFrom,
+} from './source-limits';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -58,6 +65,8 @@ interface Session {
    * each resolve their own. See {@link CredentialSlot}.
    */
   credential: CredentialSlot;
+  /** From `performance.now()`, which unlike the wall clock cannot step backwards mid-session. */
+  startedAt: number;
   lastSeen: number;
 }
 
@@ -368,6 +377,16 @@ export function createMcpHttpApp(
   },
 ): McpHttpApp {
   const sessions = new Map<string, Session>();
+  const telemetry = createMcpMetrics('http');
+
+  // Several paths end the same session, e.g. a reap and then the transport's close callback, so
+  // only the first one counts.
+  function endSession(id: string, reason: SessionEndReason): void {
+    const session = sessions.get(id);
+    if (!session) return;
+    sessions.delete(id);
+    telemetry.sessionEnded(session.startedAt, reason);
+  }
 
   /**
    * Validation outcomes keyed by credential fingerprint, with the time they were recorded.
@@ -456,14 +475,19 @@ export function createMcpHttpApp(
     const cutoff = Date.now() - SESSION_IDLE_TIMEOUT_MS;
     for (const [id, session] of sessions) {
       if (session.lastSeen < cutoff) {
-        sessions.delete(id);
+        endSession(id, 'reaped');
         void session.transport.close();
       }
     }
   }
 
   async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const source = sourceKey(req);
+    const reject = (reason: RejectionReason) =>
+      telemetry.rejected(reason, isTrustedSource(trustedSources, source));
+
     if (!originIsAcceptable(req)) {
+      reject('origin_rejected');
       sendJson(res, 403, {
         jsonrpc: '2.0',
         error: { code: -32000, message: 'Origin not allowed' },
@@ -478,6 +502,7 @@ export function createMcpHttpApp(
     // like this, and the challenge below is the only thing that tells it an authorization server
     // exists.
     if (!token) {
+      reject('no_token');
       sendUnauthorized(res);
       return;
     }
@@ -486,10 +511,10 @@ export function createMcpHttpApp(
     // rather than one per request. The session binds to the subject that comes back.
     const fingerprint = credentialFingerprint(oauthCredential(token));
     const sessionId = sessionIdFrom(req);
-    const source = sourceKey(req);
 
     const outcome = await identify(token, fingerprint, source);
     if (outcome.status === 'throttled') {
+      reject('throttled_validation');
       sendJson(
         res,
         429,
@@ -503,6 +528,7 @@ export function createMcpHttpApp(
       return;
     }
     if (outcome.status === 'invalid') {
+      reject('invalid_token');
       sendUnauthorized(res, {
         error: 'invalid_token',
         description: 'The access token is expired, revoked, or was not issued for this server',
@@ -510,6 +536,7 @@ export function createMcpHttpApp(
       return;
     }
     if (outcome.status === 'forbidden') {
+      reject('forbidden');
       sendJson(res, 403, {
         jsonrpc: '2.0',
         error: {
@@ -522,6 +549,7 @@ export function createMcpHttpApp(
       return;
     }
     if (outcome.status === 'unavailable') {
+      reject('auth_unavailable');
       sendJson(res, 503, {
         jsonrpc: '2.0',
         error: { code: -32002, message: 'Authorization server unavailable; retry shortly' },
@@ -535,6 +563,7 @@ export function createMcpHttpApp(
       const existing = sessions.get(sessionId);
       if (!existing) {
         // Unknown, or reaped. Let the client start a new one rather than failing opaquely.
+        reject('session_not_found');
         sendJson(res, 404, {
           jsonrpc: '2.0',
           error: { code: -32001, message: 'Session not found' },
@@ -548,6 +577,7 @@ export function createMcpHttpApp(
         //
         // Compared on the subject rather than the credential, so Claude refreshing its access
         // token -- which it does about hourly -- is not mistaken for a different caller.
+        reject('subject_mismatch');
         sendUnauthorized(res, {
           error: 'invalid_token',
           description: 'Session belongs to a different user',
@@ -572,6 +602,7 @@ export function createMcpHttpApp(
     // No session id: a fresh initialize, which is the expensive path. Both bounds below run before
     // anything is allocated.
     if (newSessionLimiter.exceeded(source, Date.now())) {
+      reject('throttled_session');
       sendJson(
         res,
         429,
@@ -585,6 +616,7 @@ export function createMcpHttpApp(
       return;
     }
     if (sessions.size >= MAX_SESSIONS) {
+      reject('at_capacity');
       process.stderr.write(
         `Refusing new MCP session: at capacity (${sessions.size}/${MAX_SESSIONS})\n`,
       );
@@ -616,20 +648,23 @@ export function createMcpHttpApp(
           transport,
           subject: identity.subject,
           credential: slot,
+          startedAt: performance.now(),
           lastSeen: Date.now(),
         });
+        telemetry.sessionStarted();
       },
       onsessionclosed: (id: string) => {
-        sessions.delete(id);
+        endSession(id, 'closed');
       },
     });
 
     transport.onclose = () => {
-      if (transport.sessionId) sessions.delete(transport.sessionId);
+      if (transport.sessionId) endSession(transport.sessionId, 'closed');
     };
 
     const server = createServerForCredential(slot.credential);
     await server.connect(transport);
+    telemetry.observeOperations(transport, isRegisteredTool);
     await slot.during(credential, () => transport.handleRequest(req, res));
   }
 
@@ -678,7 +713,7 @@ export function createMcpHttpApp(
 
   async function closeAll(): Promise<void> {
     for (const [id, session] of sessions) {
-      sessions.delete(id);
+      endSession(id, 'shutdown');
       await session.transport.close();
     }
   }
