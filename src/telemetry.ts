@@ -17,6 +17,7 @@ import {
   detectResources,
   envDetector,
   resourceFromAttributes,
+  serviceInstanceIdDetector,
 } from '@opentelemetry/resources';
 import {
   MeterProvider,
@@ -75,7 +76,9 @@ export function startTelemetry(): () => Promise<void> {
             [ATTR_SERVICE_VERSION]: SERVER_VERSION,
           }),
         )
-        .merge(detectResources({ detectors: [envDetector] })),
+        // A random service.instance.id per process, so concurrent local servers export distinct
+        // series rather than overwriting each other's.
+        .merge(detectResources({ detectors: [serviceInstanceIdDetector, envDetector] })),
       readers: [
         new PeriodicExportingMetricReader({
           exporter: otlpExporter(),

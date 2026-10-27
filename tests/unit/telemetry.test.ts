@@ -102,6 +102,7 @@ describe('startTelemetry', () => {
     expect(exported.resource).toMatchObject({
       'service.name': SERVICE_NAME,
       'service.version': SERVER_VERSION,
+      'service.instance.id': expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     // Instrument types follow the semantic conventions: gauges, except heap used.
     expect(exported.metrics?.['nodejs.eventloop.delay.p99']).toHaveProperty('gauge');
