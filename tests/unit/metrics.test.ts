@@ -121,6 +121,28 @@ describe('observeOperations', () => {
     ]);
   });
 
+  it('labels a made-up method _OTHER however its request ends', async () => {
+    mcp.request(1, 'made/up/cancelled');
+    mcp.notify('notifications/cancelled', { requestId: 1 });
+    mcp.request(2, 'made/up/unsent');
+    mcp.state.deliver = async () => {
+      throw new Error('client went away');
+    };
+    await mcp.error(2, -32601).catch(() => {});
+    mcp.request(3, 'made/up/abandoned');
+    mcp.transport.onclose?.();
+
+    const recorded = (await operations()).map((a) => [a['mcp.method.name'], a['error.type']]);
+    expect(recorded).toHaveLength(3);
+    expect(recorded).toEqual(
+      expect.arrayContaining([
+        ['_OTHER', 'cancelled'],
+        ['_OTHER', 'transport_error'],
+        ['_OTHER', 'session_closed'],
+      ]),
+    );
+  });
+
   it('records a cancelled request once, as cancelled', async () => {
     mcp.request(1, 'tools/call', { name: KNOWN_TOOL });
     mcp.notify('notifications/cancelled', { requestId: 1 });

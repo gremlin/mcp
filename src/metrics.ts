@@ -8,7 +8,7 @@ import {
 } from '@opentelemetry/semantic-conventions';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
-  ErrorCode,
+  ClientRequestSchema,
   isJSONRPCErrorResponse,
   isJSONRPCNotification,
   isJSONRPCRequest,
@@ -50,6 +50,12 @@ const ERROR_TYPE_TRANSPORT_ERROR = 'transport_error';
 const METHOD_INITIALIZE = 'initialize';
 const METHOD_TOOLS_CALL = 'tools/call';
 const NOTIFICATION_CANCELLED = 'notifications/cancelled';
+
+// Every request method a client may send, from the SDK's own schema. Anything else is whatever the
+// client made up, so it is labelled `_OTHER` however the request ends.
+const CLIENT_REQUEST_METHODS: ReadonlySet<string> = new Set(
+  ClientRequestSchema.options.map((option) => option.shape.method.value),
+);
 
 const MS_PER_SECOND = 1000;
 
@@ -149,7 +155,7 @@ export function createMcpMetrics(transport: keyof typeof TRANSPORT_ATTRIBUTES) {
           const name = message.params?.name;
           pending.set(message.id, {
             startedAt: performance.now(),
-            method: message.method,
+            method: CLIENT_REQUEST_METHODS.has(message.method) ? message.method : OTHER,
             ...(message.method === METHOD_TOOLS_CALL && {
               tool: typeof name === 'string' && isKnownTool(name) ? name : OTHER,
             }),
@@ -183,8 +189,6 @@ export function createMcpMetrics(transport: keyof typeof TRANSPORT_ATTRIBUTES) {
             outcome: {
               [ATTR_ERROR_TYPE]: code,
               [ATTR_RPC_RESPONSE_STATUS_CODE]: code,
-              // A method nobody handles is whatever the client sent; keep it out of the labels.
-              ...(message.error.code === ErrorCode.MethodNotFound && { [ATTR_MCP_METHOD_NAME]: OTHER }),
             },
           };
         }
