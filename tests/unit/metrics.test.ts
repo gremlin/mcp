@@ -11,22 +11,31 @@ const KNOWN_TOOL = 'list_services';
 const SPEC_BUCKETS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300];
 
 /**
- * A transport as `server.connect` leaves it: with the server's message handler installed, and
- * keeping what passes through so a test can see nothing was swallowed.
+ * A transport as `server.connect` leaves it: with the server's message and close handlers
+ * installed, and keeping what passes through so a test can see nothing was swallowed.
  */
 function connectedTransport() {
   const received: JSONRPCMessage[] = [];
   const sent: JSONRPCMessage[] = [];
-  const transport: Transport = {
-    start: async () => {},
-    close: async () => {},
-    send: async (message) => {
+  const state = {
+    closed: false,
+    // Replaceable, to hold a send open or make it fail.
+    deliver: async (message: JSONRPCMessage) => {
       sent.push(message);
     },
   };
+  const transport: Transport = {
+    start: async () => {},
+    close: async () => {},
+    send: (message) => state.deliver(message),
+  };
   transport.onmessage = (message) => received.push(message);
+  transport.onclose = () => {
+    state.closed = true;
+  };
   return {
     transport,
+    state,
     received,
     sent,
     request: (id: number, method: string, params: Record<string, unknown> = {}) =>
@@ -130,5 +139,37 @@ describe('observeOperations', () => {
       'notifications/initialized',
     ]);
     expect(mcp.sent).toEqual([{ jsonrpc: '2.0', id: 1, result: { content: [] } }]);
+  });
+
+  it('records requests still in flight when the session closes, once, as session_closed', async () => {
+    mcp.request(1, 'tools/call', { name: KNOWN_TOOL });
+    mcp.transport.onclose?.();
+    await mcp.result(1, { content: [] });
+
+    expect(await operations()).toEqual([expect.objectContaining({ 'error.type': 'session_closed' })]);
+    expect(mcp.state.closed).toBe(true);
+  });
+
+  it('records a response only once it has been sent', async () => {
+    let delivered = () => {};
+    mcp.state.deliver = () => new Promise<void>((resolve) => (delivered = resolve));
+    mcp.request(1, 'tools/call', { name: KNOWN_TOOL });
+    const sending = mcp.result(1, { content: [] });
+
+    expect(await operations()).toEqual([]);
+    delivered();
+    await sending;
+    expect(await operations()).toEqual([expect.not.objectContaining({ 'error.type': expect.anything() })]);
+  });
+
+  it('records a response the transport failed to send as transport_error, and still fails the send', async () => {
+    const failure = new Error('client went away');
+    mcp.state.deliver = async () => {
+      throw failure;
+    };
+    mcp.request(1, 'tools/call', { name: KNOWN_TOOL });
+
+    await expect(mcp.result(1, { content: [] })).rejects.toBe(failure);
+    expect(await operations()).toEqual([expect.objectContaining({ 'error.type': 'transport_error' })]);
   });
 });

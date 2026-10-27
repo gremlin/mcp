@@ -13,6 +13,7 @@ import {
   isJSONRPCNotification,
   isJSONRPCRequest,
   isJSONRPCResultResponse,
+  type JSONRPCMessage,
   type RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
 
@@ -43,6 +44,8 @@ const ATTR_REJECTION_REASON = 'gremlin.mcp.rejection.reason';
 const ATTR_SOURCE_TRUSTED = 'gremlin.mcp.source.trusted';
 const ATTR_SESSION_END_REASON = 'gremlin.mcp.session.end_reason';
 const ERROR_TYPE_CANCELLED = 'cancelled';
+const ERROR_TYPE_SESSION_CLOSED = 'session_closed';
+const ERROR_TYPE_TRANSPORT_ERROR = 'transport_error';
 
 const METHOD_INITIALIZE = 'initialize';
 const METHOD_TOOLS_CALL = 'tools/call';
@@ -112,11 +115,11 @@ export function createMcpMetrics(transport: keyof typeof TRANSPORT_ATTRIBUTES) {
 
     /**
      * Records `mcp.server.operation.duration` for every request the transport receives, from
-     * arrival to response.
+     * arrival until its response is sent, or until it is cancelled or its session closes.
      *
      * <p>Measured at the transport rather than in the tool handlers, because the SDK answers an
      * unknown tool or invalid arguments with a JSON-RPC error before any handler runs. Call after
-     * `server.connect(transport)`, which installs the handler wrapped here.
+     * `server.connect(transport)`, which installs the handlers wrapped here.
      *
      * @param isKnownTool whether a client-supplied tool name is registered; others become `_OTHER`
      */
@@ -161,24 +164,53 @@ export function createMcpMetrics(transport: keyof typeof TRANSPORT_ATTRIBUTES) {
         receive?.(message, extra);
       };
 
-      const send = transport.send.bind(transport);
-      transport.send = (message, options) => {
+      /** The request a message answers and how it went; undefined when it is not a response. */
+      function responseTo(message: JSONRPCMessage): { id: RequestId; outcome: Attributes } | undefined {
         if (isJSONRPCResultResponse(message)) {
           const { result } = message;
           if (pending.get(message.id)?.method === METHOD_INITIALIZE && typeof result.protocolVersion === 'string') {
             protocolVersion = result.protocolVersion;
           }
-          finish(message.id, result.isError === true ? { [ATTR_ERROR_TYPE]: ERROR_TYPE_TOOL_ERROR } : {});
-        } else if (isJSONRPCErrorResponse(message) && message.id !== undefined) {
-          const code = String(message.error.code);
-          finish(message.id, {
-            [ATTR_ERROR_TYPE]: code,
-            [ATTR_RPC_RESPONSE_STATUS_CODE]: code,
-            // A method nobody handles is whatever the client sent; keep it out of the labels.
-            ...(message.error.code === ErrorCode.MethodNotFound && { [ATTR_MCP_METHOD_NAME]: OTHER }),
-          });
+          return {
+            id: message.id,
+            outcome: result.isError === true ? { [ATTR_ERROR_TYPE]: ERROR_TYPE_TOOL_ERROR } : {},
+          };
         }
-        return send(message, options);
+        if (isJSONRPCErrorResponse(message) && message.id !== undefined) {
+          const code = String(message.error.code);
+          return {
+            id: message.id,
+            outcome: {
+              [ATTR_ERROR_TYPE]: code,
+              [ATTR_RPC_RESPONSE_STATUS_CODE]: code,
+              // A method nobody handles is whatever the client sent; keep it out of the labels.
+              ...(message.error.code === ErrorCode.MethodNotFound && { [ATTR_MCP_METHOD_NAME]: OTHER }),
+            },
+          };
+        }
+        return undefined;
+      }
+
+      // Finished once the send settles: a client that has gone never received the response.
+      const send = transport.send.bind(transport);
+      transport.send = async (message, options) => {
+        const response = responseTo(message);
+        try {
+          await send(message, options);
+        } catch (error) {
+          if (response) finish(response.id, { [ATTR_ERROR_TYPE]: ERROR_TYPE_TRANSPORT_ERROR });
+          throw error;
+        }
+        if (response) finish(response.id, response.outcome);
+      };
+
+      // Closing a session abandons whatever it was still serving, which then never gets a response.
+      const close = transport.onclose;
+      transport.onclose = () => {
+        for (const id of [...pending.keys()]) {
+          finish(id, { [ATTR_ERROR_TYPE]: ERROR_TYPE_SESSION_CLOSED });
+        }
+        close?.();
       };
     },
   };
