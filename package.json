@@ -5,6 +5,9 @@
   "main": "build/main.mjs",
   "bin": "build/main.mjs",
   "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "files": [
     "build",
     "README.md"

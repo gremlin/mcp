@@ -17,7 +17,7 @@ This MCP server provides access to Gremlin's reliability testing and management 
 ## Installation
 
 ### Prerequisites
-- Node.js 18 or higher
+- Node.js 22.15 or higher
 - For the stdio server: a valid [Gremlin API key](https://app.gremlin.com/settings/api-keys)
 - For the hosted server: an OAuth client registered with the authorization server, see
   [Deploying the hosted server](#deploying-the-hosted-server)
@@ -447,8 +447,6 @@ Then run:
 ```bash
 env $(cat .env | xargs) make test
 ```
-
-**Note:** Running tests requires Node.js 20.19+ or 22.12+ (vitest 4.x dependency).
 
 ### Inspector
 
