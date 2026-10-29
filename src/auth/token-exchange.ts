@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { meteredFetch } from '../metrics';
+
 /**
  * RFC 8693 token exchange against Gremlin's authorization server. See the design, §B3.8 and §B4.3.
  *
@@ -50,6 +52,7 @@ interface CacheEntry {
  */
 export class TokenExchanger {
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly fetch = meteredFetch();
 
   constructor(
     private readonly config: TokenExchangeConfig,
@@ -78,18 +81,23 @@ export class TokenExchanger {
 
     let response: Response;
     try {
-      response = await fetch(this.config.tokenEndpoint, {
-        method: 'POST',
-        headers: {
-          // client_secret_basic: this server proves who it is. The subject token stays in the
-          // body, where it is data rather than a credential.
-          'Authorization': `Basic ${Buffer.from(
-            `${encodeURIComponent(this.config.clientId)}:${encodeURIComponent(this.config.clientSecret)}`,
-          ).toString('base64')}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
+      response = await this.fetch(
+        this.config.tokenEndpoint,
+        {
+          method: 'POST',
+          headers: {
+            // client_secret_basic: this server proves who it is. The subject token stays in the
+            // body, where it is data rather than a credential.
+            'Authorization': `Basic ${Buffer.from(
+              `${encodeURIComponent(this.config.clientId)}:${encodeURIComponent(this.config.clientSecret)}`,
+            ).toString('base64')}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body,
         },
-        body,
-      });
+        // A fixed endpoint, so its path is its own template. It shares a host with the API.
+        new URL(this.config.tokenEndpoint).pathname,
+      );
     } catch {
       // A transport failure says nothing about the token; reporting it as invalid would
       // disconnect every working connector during a blip.
