@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 
 import { createMcpHttpApp, exchangeForApiCredential } from './http/app';
 import { positiveOr } from './http/source-limits';
+import { startTelemetry } from './telemetry';
 import {
   getApiResourceIdentifier,
   getAuthorizationServer,
@@ -31,6 +32,8 @@ const resourceIdentifier = getResourceIdentifier();
 // every request would fail authorization for a cause nothing in the logs would name.
 const { clientId, clientSecret } = getExchangeClientCredentials();
 
+const stopTelemetry = startTelemetry();
+
 const exchanger = new TokenExchanger({
   tokenEndpoint: `${getAuthorizationServer()}/v1/oauth2/token`,
   clientId,
@@ -58,8 +61,11 @@ httpServer.listen(port, () => {
 
 async function shutdown(): Promise<void> {
   clearInterval(reaper);
+  // Stop accepting first, so no session can open after closeAll has run.
+  const closed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
   await app.closeAll();
-  httpServer.close(() => process.exit(0));
+  await Promise.all([closed, stopTelemetry()]);
+  process.exit(0);
 }
 
 process.on('SIGTERM', () => void shutdown());
