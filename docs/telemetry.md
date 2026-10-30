@@ -1,6 +1,6 @@
 # Telemetry
 
-The hosted server (`build/http.mjs`) exports OpenTelemetry metrics when `GREMLIN_MCP_ENABLE_TELEMETRY` is set.
+The stdio and hosted servers export OpenTelemetry metrics when `GREMLIN_MCP_ENABLE_TELEMETRY` is set.
 
 ## Quick start
 
@@ -14,6 +14,8 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.example.com:4318
 # 3. Optional: delta temporality, which Datadog recommends
 export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
 ```
+
+For the stdio server, set these in the `env` of its entry in your MCP client's config.
 
 ## Configuration
 
@@ -40,7 +42,8 @@ A misconfigured SDK disables telemetry with an error on stderr.
 
 ## Metrics
 
-All carry the `service.name` and `service.version` resource attributes.
+All carry the `service.name`, `service.version` and `service.instance.id` (random per process)
+resource attributes.
 
 ### MCP
 
@@ -50,10 +53,11 @@ All carry the `service.name` and `service.version` resource attributes.
 | Metric | Type | Unit | Attributes | Description |
 | --- | --- | --- | --- | --- |
 | `mcp.server.operation.duration` | Histogram | `s` | `mcp.method.name`, `mcp.protocol.version`, `gen_ai.tool.name`, `gen_ai.operation.name`, `error.type`, `rpc.response.status_code`, `network.transport`, `network.protocol.name` | Time from receiving a request to sending its response |
-| `mcp.server.session.duration` | Histogram | `s` | `gremlin.mcp.session.end_reason`, `network.transport`, `network.protocol.name` | How long a session lasted |
-| `gremlin.mcp.sessions.active` | UpDownCounter | `{session}` | | Open sessions |
-| `gremlin.mcp.requests.rejected` | Counter | `{request}` | `gremlin.mcp.rejection.reason`, `gremlin.mcp.source.trusted` | Requests refused before reaching a session |
+| `mcp.server.session.duration` | Histogram | `s` | `gremlin.mcp.session.end_reason`, `network.transport`, `network.protocol.name` | How long a session lasted. Hosted only |
+| `gremlin.mcp.sessions.active` | UpDownCounter | `{session}` | | Open sessions. Hosted only |
+| `gremlin.mcp.requests.rejected` | Counter | `{request}` | `gremlin.mcp.rejection.reason`, `gremlin.mcp.source.trusted` | Requests refused before reaching a session. Hosted only |
 
+- **`network.transport`:** `pipe` for stdio; `tcp` for hosted, with `network.protocol.name=http`.
 - **`error.type`:** `tool_error` when a tool returns `isError`, or the JSON-RPC error code. A request that gets no response is `cancelled` (by the client), `session_closed` (its session ended first) or `transport_error` (the response could not be sent).
 - **`gremlin.mcp.session.end_reason`:** `closed`, `reaped` (idle) or `shutdown`.
 - **`gremlin.mcp.rejection.reason`:** `no_token`, `invalid_token`, `subject_mismatch`, `forbidden`, `origin_rejected`, `session_not_found`, `throttled_validation`, `throttled_session`, `at_capacity` or `auth_unavailable`. `no_token` is the normal first step of OAuth discovery.

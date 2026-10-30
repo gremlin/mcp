@@ -17,7 +17,7 @@ This MCP server provides access to Gremlin's reliability testing and management 
 ## Installation
 
 ### Prerequisites
-- Node.js 18 or higher
+- Node.js 22.15 or higher
 - For the stdio server: a valid [Gremlin API key](https://app.gremlin.com/settings/api-keys)
 - For the hosted server: an OAuth client registered with the authorization server, see
   [Deploying the hosted server](#deploying-the-hosted-server)
@@ -48,6 +48,7 @@ server, and nothing in the hosted column is read by the stdio server.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `GREMLIN_SERVICE_URL` | No | `https://api.gremlin.com/v1` | Base URL for the Gremlin API, including the version prefix. Override to target a staging or self-hosted environment. |
+| `GREMLIN_MCP_ENABLE_TELEMETRY` | No | *(off)* | `1` turns on OpenTelemetry metrics. See [docs/telemetry.md](docs/telemetry.md). |
 
 **stdio — API key** (`build/main.mjs`)
 
@@ -73,7 +74,6 @@ server, and nothing in the hosted column is read by the stdio server.
 | `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED` | No | `3000` | The same cap for a trusted source. Kept below the authorization server's per-client bound, so no single source can spend all of it. |
 | `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS` | No | *(none)* | Comma-separated CIDR ranges or addresses whose traffic is many users rather than one caller — an LLM vendor's egress, such as Anthropic's `160.79.104.0/21` for Claude's hosted surfaces. They get the `_TRUSTED` bounds. Unset trusts nothing; an entry that does not parse is skipped, so a typo fails closed. |
 | `GREMLIN_MCP_ALLOWED_ORIGINS` | No | *(none)* | Comma-separated browser origins permitted to call `/mcp`. Requests with no `Origin` are allowed — the legitimate caller is a server, not a browser — and any present value must be listed. Only needed for local development against a browser-based MCP client. |
-| `GREMLIN_MCP_ENABLE_TELEMETRY` | No | *(off)* | `1` turns on OpenTelemetry metrics. See [docs/telemetry.md](docs/telemetry.md). |
 
 ### Deploying the hosted server
 
@@ -447,8 +447,6 @@ Then run:
 ```bash
 env $(cat .env | xargs) make test
 ```
-
-**Note:** Running tests requires Node.js 20.19+ or 22.12+ (vitest 4.x dependency).
 
 ### Inspector
 

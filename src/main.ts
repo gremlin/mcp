@@ -1,7 +1,10 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { apiKeyCredentialFromEnvironment } from './auth/credential';
+import { createMcpMetrics } from './metrics';
 import { createGremlinMcpServer } from './server';
+import { startTelemetry } from './telemetry';
+import { isRegisteredTool } from './tools/index';
 
 /**
  * The locally-run server: one process, one person, one static API key.
@@ -20,6 +23,11 @@ function readCredentialOrExit() {
   }
 }
 
-const server = createGremlinMcpServer(readCredentialOrExit());
+const credential = readCredentialOrExit();
+startTelemetry();
+
+const server = createGremlinMcpServer(credential);
 const transport = new StdioServerTransport();
-server.connect(transport);
+server.connect(transport).then(() =>
+  createMcpMetrics('stdio').observeOperations(transport, isRegisteredTool),
+);
