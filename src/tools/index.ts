@@ -29,6 +29,13 @@ interface Tool {
   handler: (args: any, extra: any) => Promise<any>;
 }
 
+/** Every tool name this process has registered; the set is the same for every session. */
+const registeredToolNames = new Set<string>();
+
+export function isRegisteredTool(name: string): boolean {
+  return registeredToolNames.has(name);
+}
+
 export function registerTools(server: McpServer, api: GremlinApi) {
   const tools: Tool[] = [
     createListServicesTool(api),
@@ -65,6 +72,7 @@ export function registerTools(server: McpServer, api: GremlinApi) {
   ];
 
   for (const tool of tools) {
+    registeredToolNames.add(tool.name);
     server.registerTool(
       tool.name,
       {

@@ -40,9 +40,29 @@ A misconfigured SDK disables telemetry with an error on stderr.
 
 ## Metrics
 
-Node runtime metrics, under their
-[semantic-convention](https://opentelemetry.io/docs/specs/semconv/runtime/nodejs-metrics/) names.
 All carry the `service.name` and `service.version` resource attributes.
+
+### MCP
+
+`mcp.*` metrics follow the
+[MCP semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/mcp.md).
+
+| Metric | Type | Unit | Attributes | Description |
+| --- | --- | --- | --- | --- |
+| `mcp.server.operation.duration` | Histogram | `s` | `mcp.method.name`, `mcp.protocol.version`, `gen_ai.tool.name`, `gen_ai.operation.name`, `error.type`, `rpc.response.status_code`, `network.transport`, `network.protocol.name` | Time from receiving a request to sending its response |
+| `mcp.server.session.duration` | Histogram | `s` | `gremlin.mcp.session.end_reason`, `network.transport`, `network.protocol.name` | How long a session lasted |
+| `gremlin.mcp.sessions.active` | UpDownCounter | `{session}` | | Open sessions |
+| `gremlin.mcp.requests.rejected` | Counter | `{request}` | `gremlin.mcp.rejection.reason`, `gremlin.mcp.source.trusted` | Requests refused before reaching a session |
+
+- **`error.type`:** `tool_error` when a tool returns `isError`, or the JSON-RPC error code. A request that gets no response is `cancelled` (by the client), `session_closed` (its session ended first) or `transport_error` (the response could not be sent).
+- **`gremlin.mcp.session.end_reason`:** `closed`, `reaped` (idle) or `shutdown`.
+- **`gremlin.mcp.rejection.reason`:** `no_token`, `invalid_token`, `subject_mismatch`, `forbidden`, `origin_rejected`, `session_not_found`, `throttled_validation`, `throttled_session`, `at_capacity` or `auth_unavailable`. `no_token` is the normal first step of OAuth discovery.
+- Unknown tool and method names are recorded as `_OTHER`.
+
+### Runtime
+
+Under their
+[semantic-convention](https://opentelemetry.io/docs/specs/semconv/runtime/nodejs-metrics/) names.
 
 | Metric | Type | Unit | Attributes | Description |
 | --- | --- | --- | --- | --- |
