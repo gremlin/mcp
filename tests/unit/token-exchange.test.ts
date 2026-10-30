@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { TokenExchanger } from '../../src/auth/token-exchange';
+import { collectMetrics } from './metric-reader';
 
 /**
  * Token exchange is what replaced forwarding the client's token upstream. Two properties matter
@@ -34,6 +35,27 @@ describe('TokenExchanger', () => {
     vi.stubGlobal('fetch', fetchMock);
     return fetchMock;
   }
+
+  it('records the exchange under its own url.template, and nothing of the token', async () => {
+    const collected = collectMetrics();
+    try {
+      stubFetch(() => ({ status: 200, body: { access_token: 'gremlin_oat_api', expires_in: 300 } }));
+
+      await new TokenExchanger(CONFIG).exchange(SUBJECT);
+
+      expect(await collected.attributes()).toEqual([
+        {
+          'http.request.method': 'POST',
+          'server.address': 'api.gremlin.com',
+          'server.port': 443,
+          'url.template': '/v1/oauth2/token',
+          'http.response.status_code': 200,
+        },
+      ]);
+    } finally {
+      await collected.stop();
+    }
+  });
 
   it('sends the subject token as a parameter and authenticates as itself', async () => {
     // The whole point. The client's token is in the body, where it is data; the Authorization

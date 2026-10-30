@@ -63,6 +63,19 @@ resource attributes.
 - **`gremlin.mcp.rejection.reason`:** `no_token`, `invalid_token`, `subject_mismatch`, `forbidden`, `origin_rejected`, `session_not_found`, `throttled_validation`, `throttled_session`, `at_capacity` or `auth_unavailable`. `no_token` is the normal first step of OAuth discovery.
 - Unknown tool and method names are recorded as `_OTHER`.
 
+### Gremlin API
+
+Calls to the Gremlin API and the token exchange, under the
+[HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/).
+
+| Metric | Type | Unit | Attributes | Description |
+| --- | --- | --- | --- | --- |
+| `http.client.request.duration` | Histogram | `s` | `http.request.method`, `server.address`, `server.port`, `http.response.status_code`, `error.type`, `url.template` | Time until the response headers arrive, per attempt, so each retry counts |
+
+- **`error.type`:** the status code for 4xx and 5xx. A request that got no response records the system error code (`ECONNRESET`, `ENOTFOUND`), or the error's name if there is none.
+- **`url.template`:** `/v1/oauth2/token` for the token exchange (hosted only). API calls have none, since their paths carry ids.
+- Buckets extend the advised ones past 10s, up to 300s.
+
 ### Runtime
 
 Under their

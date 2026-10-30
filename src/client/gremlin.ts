@@ -1,6 +1,7 @@
 import TTLCache from '@isaacs/ttlcache';
 import { getServiceUrl } from '../config';
 import { authorizationHeader, type GremlinCredential } from '../auth/credential';
+import { meteredFetch } from '../metrics';
 
 
 export interface Service {
@@ -317,6 +318,7 @@ function buildHttpError(status: number, body: string): GremlinApiError {
 export class GremlinApi {
   private baseUrl: string = getServiceUrl();
   private userAgent = "@gremlin/gremlin-mcp/2.7.0";
+  private fetch = meteredFetch();
 
   /**
    * Response cache, keyed on URL alone.
@@ -658,7 +660,7 @@ export class GremlinApi {
     const { params, ...fetchOptions } = options;
     const urlString = this.buildUrl(path, params);
 
-    const response = await fetch(urlString, {
+    const response = await this.fetch(urlString, {
         ...fetchOptions,
         headers: {
             'Content-Type': 'application/json',

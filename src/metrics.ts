@@ -1,8 +1,13 @@
 import { metrics, type Attributes } from '@opentelemetry/api';
 import {
   ATTR_ERROR_TYPE,
+  ATTR_HTTP_REQUEST_METHOD,
+  ATTR_HTTP_RESPONSE_STATUS_CODE,
   ATTR_NETWORK_PROTOCOL_NAME,
   ATTR_NETWORK_TRANSPORT,
+  ATTR_SERVER_ADDRESS,
+  ATTR_SERVER_PORT,
+  METRIC_HTTP_CLIENT_REQUEST_DURATION,
   NETWORK_TRANSPORT_VALUE_PIPE,
   NETWORK_TRANSPORT_VALUE_TCP,
 } from '@opentelemetry/semantic-conventions';
@@ -28,6 +33,13 @@ const REQUESTS_REJECTED = 'gremlin.mcp.requests.rejected';
 const DURATION_BUCKETS_S = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300];
 // Sessions idle out after 30 minutes, so most outlive the advised 300s top bucket.
 const SESSION_DURATION_BUCKETS_S = [...DURATION_BUCKETS_S, 600, 1800, 3600, 7200];
+// The HTTP semantic conventions' advice, extended past 10s: calls to Gremlin have no timeout, so a
+// slow one would otherwise be indistinguishable from a hung one.
+const HTTP_CLIENT_DURATION_BUCKETS_S = [
+  0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, 15, 30, 60, 120, 300,
+];
+const HTTP_DEFAULT_PORTS: Record<string, number> = { 'http:': 80, 'https:': 443 };
+const HTTP_ERROR_STATUS = 400;
 
 // Development-status semantic conventions, copied rather than imported from the incubating entry
 // point, which can break in a minor release.
@@ -36,6 +48,7 @@ const ATTR_MCP_PROTOCOL_VERSION = 'mcp.protocol.version';
 const ATTR_GEN_AI_TOOL_NAME = 'gen_ai.tool.name';
 const ATTR_GEN_AI_OPERATION_NAME = 'gen_ai.operation.name';
 const ATTR_RPC_RESPONSE_STATUS_CODE = 'rpc.response.status_code';
+const ATTR_URL_TEMPLATE = 'url.template';
 const GEN_AI_OPERATION_EXECUTE_TOOL = 'execute_tool';
 const ERROR_TYPE_TOOL_ERROR = 'tool_error';
 const OTHER = '_OTHER';
@@ -218,4 +231,57 @@ export function createMcpMetrics(transport: keyof typeof TRANSPORT_ATTRIBUTES) {
       };
     },
   };
+}
+
+/** `fetch`, plus the path's low-cardinality template when the caller has one. */
+export type MeteredFetch = (url: string, init?: RequestInit, template?: string) => Promise<Response>;
+
+/**
+ * `fetch` that records `http.client.request.duration` on the global meter provider, one point per
+ * call (so each retry counts), timed until the response headers arrive.
+ *
+ * <p>Create after telemetry has started, like {@link createMcpMetrics}. No attribute carries a path,
+ * query or token: pass a `template` only when it has no ids in it.
+ */
+export function meteredFetch(): MeteredFetch {
+  const meter = metrics.getMeter(METER_NAME);
+  const requestDuration = meter.createHistogram(METRIC_HTTP_CLIENT_REQUEST_DURATION, {
+    unit: 's',
+    advice: { explicitBucketBoundaries: HTTP_CLIENT_DURATION_BUCKETS_S },
+  });
+
+  return async (url, init = {}, template) => {
+    const startedAt = performance.now();
+    const { hostname, port, protocol } = new URL(url);
+    function record(outcome: Attributes): void {
+      requestDuration.record((performance.now() - startedAt) / MS_PER_SECOND, {
+        [ATTR_HTTP_REQUEST_METHOD]: init.method ?? 'GET',
+        [ATTR_SERVER_ADDRESS]: hostname,
+        [ATTR_SERVER_PORT]: port ? Number(port) : HTTP_DEFAULT_PORTS[protocol],
+        ...(template !== undefined && { [ATTR_URL_TEMPLATE]: template }),
+        ...outcome,
+      });
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(url, init);
+    } catch (error) {
+      record({ [ATTR_ERROR_TYPE]: fetchErrorType(error) });
+      throw error;
+    }
+    record({
+      [ATTR_HTTP_RESPONSE_STATUS_CODE]: response.status,
+      ...(response.status >= HTTP_ERROR_STATUS && { [ATTR_ERROR_TYPE]: String(response.status) }),
+    });
+    return response;
+  };
+}
+
+/** Why a request got no response: its system error code (`ECONNRESET`), else the error's name. */
+function fetchErrorType(error: unknown): string {
+  if (!(error instanceof Error)) return OTHER;
+  // undici wraps the system error as the cause of a generic "fetch failed".
+  const { cause } = error as { cause?: { code?: unknown } };
+  return typeof cause?.code === 'string' ? cause.code : error.name;
 }

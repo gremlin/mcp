@@ -1,6 +1,8 @@
+import type { Histogram } from '@opentelemetry/sdk-metrics';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GremlinApi, GremlinApiError, isJsonContentTypeHeader } from '../../src/client/gremlin';
 import type { GremlinCredential } from '../../src/auth/credential';
+import { collectMetrics } from './metric-reader';
 
 const TEST_CREDENTIAL: GremlinCredential = { kind: 'apiKey', value: 'test-key' };
 
@@ -387,5 +389,37 @@ describe('GremlinApiError classification', () => {
     // rather than one where the call never went out, is not — see the 4xx
     // noRetry test above), so this should exhaust all 3 attempts.
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('GremlinApi metrics', () => {
+  let collected: ReturnType<typeof collectMetrics>;
+
+  beforeEach(() => {
+    collected = collectMetrics();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await collected.stop();
+  });
+
+  it('records every attempt, so retries count, without the path', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse(500, 'boom'));
+
+    await new GremlinApi(TEST_CREDENTIAL).execute('GET', 'services/abc-123').catch(() => {});
+
+    const points = await collected.points('http.client.request.duration');
+    expect(points.map((point) => point.attributes)).toEqual([
+      {
+        'http.request.method': 'GET',
+        'server.address': 'api.gremlin.com',
+        'server.port': 443,
+        'http.response.status_code': 500,
+        'error.type': '500',
+      },
+    ]);
+    expect((points[0]!.value as Histogram).count).toBe(3);
   });
 });
