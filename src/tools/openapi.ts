@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { assertRequiredParams, GremlinApi, GremlinApiError, wrapGremlinError } from '../client/gremlin';
 import { getSpec, searchSpec, OpenApiSpec } from '../openapi/spec-loader';
 
-export function createSearchGremlinApiTool(_api: GremlinApi) {
+export function createSearchGremlinApiTool(api: GremlinApi) {
   return {
     name: 'search_gremlin_api',
     title: 'Search Gremlin API',
@@ -42,7 +42,7 @@ export function createSearchGremlinApiTool(_api: GremlinApi) {
 
       let spec;
       try {
-        spec = await getSpec();
+        spec = await getSpec(api.serviceUrl);
       } catch (err) {
         throw wrapGremlinError('Failed to load Gremlin OpenAPI spec', err);
       }
@@ -183,7 +183,7 @@ function callGremlinApi(
     let runPrivileges: string[] = [];
     let privilegesUnknown = false;
     try {
-      const spec = await getSpec();
+      const spec = await getSpec(api.serviceUrl);
       runPrivileges = getRunPrivileges(spec, specPath, method);
     } catch (err) {
       privilegesUnknown = method !== 'GET';

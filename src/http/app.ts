@@ -22,12 +22,9 @@ import { GremlinApi, GremlinApiError } from '../client/gremlin';
 import { createMcpMetrics, type RejectionReason, type SessionEndReason } from '../metrics';
 import { createGremlinMcpServer } from '../server';
 import { isRegisteredTool } from '../tools/index';
-import {
-  isTrustedSource,
-  positiveOr,
-  SourceRateLimiter,
-  trustedSourcesFrom,
-} from './source-limits';
+import { isTrustedSource, SourceRateLimiter } from './source-limits';
+
+import type { HttpAppConfig } from '../config';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -78,53 +75,6 @@ interface Session {
  * server object for longer than the credential that created it is even valid.
  */
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-
-/**
- * Hard ceiling on concurrent sessions.
- *
- * <p>Each session holds an McpServer, a GremlinApi and that client's own response cache, and is
- * built on the first request rather than on demand -- so without a ceiling, N requests bearing N
- * distinct tokens allocate N of them and nothing is released until the idle reaper runs half an
- * hour later. Refusing at the limit degrades for new connections; not refusing degrades for
- * everyone.
- */
-const MAX_SESSIONS = Number(process.env.GREMLIN_MCP_MAX_SESSIONS ?? 2000);
-
-/**
- * Per-source cap on session creation, `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE`.
- *
- * <p>Session setup is the expensive path here. Reusing an established session is deliberately not
- * counted: a legitimate client makes many requests against one session and should never be
- * throttled for it.
- */
-const DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE = 20;
-
-/**
- * The same cap for a trusted source, `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED` -- sized for
- * an LLM vendor's whole user base arriving from a handful of addresses.
- */
-const DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_TRUSTED_SOURCE = 1000;
-
-/**
- * Per-source cap on credential validations that go upstream, `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE`.
- *
- * <p>Only a cache miss counts: a credential already validated inside the TTL, and every request on
- * an established session, never touch it. What it bounds is the flood of distinct junk tokens, each
- * of which would otherwise cost a token exchange -- and a client-secret verification -- at the
- * authorization server. Those exchanges all leave from this server under one client identity, so
- * without a bound here one caller could spend the budget every user's exchanges share there.
- *
- * <p>Generous for one caller: a person's client presents one token, revalidated about once a minute
- * at most.
- */
-const DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_SOURCE = 60;
-
-/**
- * The same cap for a trusted source, `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED`. Below the
- * authorization server's per-client bound, so no single source -- trusted or not -- can spend all
- * of it.
- */
-const DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_TRUSTED_SOURCE = 3000;
 
 const RATE_WINDOW_MS = 60 * 1000;
 
@@ -207,13 +157,9 @@ function sourceKey(req: IncomingMessage): string {
  * business driving this endpoint from a page. Configurable for local development against a browser
  * MCP client.
  */
-function originIsAcceptable(req: IncomingMessage): boolean {
+function originIsAcceptable(req: IncomingMessage, allowed: string[]): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;
-  const allowed = (process.env.GREMLIN_MCP_ALLOWED_ORIGINS ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
   return allowed.includes(origin);
 }
 
@@ -248,6 +194,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
  */
 function sendUnauthorized(
   res: ServerResponse,
+  resourceUrl: string,
   options: { error?: 'invalid_token' | 'insufficient_scope'; description?: string } = {},
 ): void {
   sendJson(
@@ -258,7 +205,7 @@ function sendUnauthorized(
       error: { code: -32001, message: options.description ?? 'Authentication required' },
       id: null,
     },
-    { 'WWW-Authenticate': buildChallenge(options.error, options.description) },
+    { 'WWW-Authenticate': buildChallenge(resourceUrl, options.error, options.description) },
   );
 }
 
@@ -311,7 +258,10 @@ export interface CredentialIdentity {
  *
  * <p>`getSelf` runs with the *exchanged* token, only to learn the subject a session binds to.
  */
-export function exchangeForApiCredential(exchanger: TokenExchanger): CredentialValidator {
+export function exchangeForApiCredential(
+  exchanger: TokenExchanger,
+  serviceUrl: string,
+): CredentialValidator {
   return async (accessToken) => {
     const exchanged = await exchanger.exchange(accessToken);
     if (!exchanged.ok) {
@@ -335,7 +285,7 @@ export function exchangeForApiCredential(exchanger: TokenExchanger): CredentialV
     });
 
     try {
-      const self = await new GremlinApi(credential).getSelf();
+      const self = await new GremlinApi(credential, serviceUrl).getSelf();
       return { status: 'ok', identity: { subject: `${self.company_id}:${self.user_id}` }, credential };
     } catch (error) {
       const status = error instanceof GremlinApiError ? error.statusCode : undefined;
@@ -366,10 +316,12 @@ export interface McpHttpApp {
 
 export function createMcpHttpApp(
   {
-    createServerForCredential = createGremlinMcpServer,
+    config,
+    createServerForCredential = (credential) => createGremlinMcpServer(credential, config.serviceUrl),
     validateCredential,
     reapCredentialCaches = () => {},
   }: {
+    config: HttpAppConfig;
     createServerForCredential?: ServerFactory;
     validateCredential: CredentialValidator;
     /** Swept on the same tick as idle sessions; see {@link TokenExchanger.reapExpired}. */
@@ -395,31 +347,17 @@ export function createMcpHttpApp(
    */
   const validated = new Map<string, { outcome: ValidationOutcome; at: number }>();
 
-  // Read when the app is built rather than at import, so each app -- and each test -- gets the
-  // configuration in force when it was created.
-  const trustedSources = trustedSourcesFrom(process.env.GREMLIN_MCP_TRUSTED_SOURCE_CIDRS);
+  const { trustedSources } = config;
   const validationLimiter = new SourceRateLimiter(
     RATE_WINDOW_MS,
-    positiveOr(
-      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE,
-      DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_SOURCE,
-    ),
-    positiveOr(
-      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED,
-      DEFAULT_MAX_VALIDATIONS_PER_MINUTE_PER_TRUSTED_SOURCE,
-    ),
+    config.maxValidationsPerMinute,
+    config.maxValidationsPerMinuteTrusted,
     trustedSources,
   );
   const newSessionLimiter = new SourceRateLimiter(
     RATE_WINDOW_MS,
-    positiveOr(
-      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE,
-      DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_SOURCE,
-    ),
-    positiveOr(
-      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED,
-      DEFAULT_MAX_NEW_SESSIONS_PER_MINUTE_PER_TRUSTED_SOURCE,
-    ),
+    config.maxNewSessionsPerMinute,
+    config.maxNewSessionsPerMinuteTrusted,
     trustedSources,
   );
 
@@ -429,7 +367,7 @@ export function createMcpHttpApp(
    * <p>Previously a well-formed `gremlin_oat_` prefix was enough to get an McpServer with every
    * tool registered, a GremlinApi and a response cache, parked in the session map for thirty idle
    * minutes -- and the token was not checked against the API until the first tool call. So junk
-   * tokens could fill the table to MAX_SESSIONS and every subsequent connection got a 503,
+   * tokens could fill the table to the session ceiling and every subsequent connection got a 503,
    * including ones that would have authenticated. The per-source rate limit bounds the rate, not
    * the total, and a handful of addresses sustains a full table inside the idle window.
    *
@@ -486,7 +424,7 @@ export function createMcpHttpApp(
     const reject = (reason: RejectionReason) =>
       telemetry.rejected(reason, isTrustedSource(trustedSources, source));
 
-    if (!originIsAcceptable(req)) {
+    if (!originIsAcceptable(req, config.allowedOrigins)) {
       reject('origin_rejected');
       sendJson(res, 403, {
         jsonrpc: '2.0',
@@ -503,7 +441,7 @@ export function createMcpHttpApp(
     // exists.
     if (!token) {
       reject('no_token');
-      sendUnauthorized(res);
+      sendUnauthorized(res, config.resourceUrl);
       return;
     }
 
@@ -529,7 +467,7 @@ export function createMcpHttpApp(
     }
     if (outcome.status === 'invalid') {
       reject('invalid_token');
-      sendUnauthorized(res, {
+      sendUnauthorized(res, config.resourceUrl, {
         error: 'invalid_token',
         description: 'The access token is expired, revoked, or was not issued for this server',
       });
@@ -578,7 +516,7 @@ export function createMcpHttpApp(
         // Compared on the subject rather than the credential, so Claude refreshing its access
         // token -- which it does about hourly -- is not mistaken for a different caller.
         reject('subject_mismatch');
-        sendUnauthorized(res, {
+        sendUnauthorized(res, config.resourceUrl, {
           error: 'invalid_token',
           description: 'Session belongs to a different user',
         });
@@ -615,10 +553,10 @@ export function createMcpHttpApp(
       );
       return;
     }
-    if (sessions.size >= MAX_SESSIONS) {
+    if (sessions.size >= config.maxSessions) {
       reject('at_capacity');
       process.stderr.write(
-        `Refusing new MCP session: at capacity (${sessions.size}/${MAX_SESSIONS})\n`,
+        `Refusing new MCP session: at capacity (${sessions.size}/${config.maxSessions})\n`,
       );
       sendJson(
         res,
@@ -679,7 +617,7 @@ export function createMcpHttpApp(
         res.end();
         return;
       }
-      sendJson(res, 200, buildProtectedResourceMetadata(), {
+      sendJson(res, 200, buildProtectedResourceMetadata(config), {
         'Cache-Control': 'public, max-age=3600',
         'Access-Control-Allow-Origin': '*',
       });

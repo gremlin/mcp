@@ -2,14 +2,19 @@ import { describe, it, expect } from 'vitest';
 
 import {
   isTrustedSource,
-  positiveOr,
+  parseSourceRange,
   SourceRateLimiter,
   trustedSourcesFrom,
+  type SourceRange,
 } from '../../src/http/source-limits';
+
+function trustedRanges(...entries: string[]) {
+  return trustedSourcesFrom(entries.map((entry) => parseSourceRange(entry) as SourceRange));
+}
 
 describe('trusted sources', () => {
   it('matches addresses inside a configured range, IPv4 and IPv6', () => {
-    const trusted = trustedSourcesFrom('160.79.104.0/21, 2001:db8::/32, 198.51.100.7');
+    const trusted = trustedRanges('160.79.104.0/21', '2001:db8::/32', '198.51.100.7');
 
     expect(isTrustedSource(trusted, '160.79.107.200')).toBe(true);
     expect(isTrustedSource(trusted, '2001:db8::1')).toBe(true);
@@ -19,29 +24,27 @@ describe('trusted sources', () => {
     expect(isTrustedSource(trusted, 'unattributed')).toBe(false);
   });
 
-  it('trusts nothing when unset, and skips an entry it cannot parse rather than widening', () => {
-    expect(isTrustedSource(trustedSourcesFrom(undefined), '160.79.104.1')).toBe(false);
-
-    const trusted = trustedSourcesFrom('not-a-range, 10.0.0.0/99, 203.0.113.0/24');
-    expect(isTrustedSource(trusted, '203.0.113.9')).toBe(true);
-    expect(isTrustedSource(trusted, '10.1.2.3')).toBe(false);
+  it('trusts nothing when no range is configured', () => {
+    expect(isTrustedSource(trustedRanges(), '160.79.104.1')).toBe(false);
   });
 });
 
-describe('positiveOr', () => {
-  it('falls back when a bound is missing, not a number, or not positive', () => {
-    expect(positiveOr('25', 60)).toBe(25);
-    expect(positiveOr(undefined, 60)).toBe(60);
-    expect(positiveOr('abc', 60)).toBe(60);
-    expect(positiveOr('Infinity', 60)).toBe(60);
-    expect(positiveOr('0', 60)).toBe(60);
-    expect(positiveOr('-5', 60)).toBe(60);
+describe('parseSourceRange', () => {
+  it('parses a single address or a CIDR range', () => {
+    expect(parseSourceRange('198.51.100.7')).toEqual({ address: '198.51.100.7', type: 'ipv4' });
+    expect(parseSourceRange('2001:db8::/32')).toEqual({ address: '2001:db8::', prefix: 32, type: 'ipv6' });
+  });
+
+  it('rejects anything it cannot represent exactly, rather than widening it', () => {
+    for (const entry of ['not-a-range', '10.0.0.0/99', '10.0.0.0/', '10.0.0.0/8/8', '2001:db8::/129', '10.0.0.0/1.5']) {
+      expect(parseSourceRange(entry)).toBeUndefined();
+    }
   });
 });
 
 describe('SourceRateLimiter', () => {
   it('gives each source its own allowance and a trusted source a larger one', () => {
-    const limiter = new SourceRateLimiter(60_000, 2, 5, trustedSourcesFrom('198.51.100.0/24'));
+    const limiter = new SourceRateLimiter(60_000, 2, 5, trustedRanges('198.51.100.0/24'));
     const now = 1_000;
 
     const attacker = [1, 2, 3].map(() => limiter.exceeded('203.0.113.1', now));
@@ -54,7 +57,7 @@ describe('SourceRateLimiter', () => {
   });
 
   it('starts a fresh allowance each window', () => {
-    const limiter = new SourceRateLimiter(60_000, 1, 1, trustedSourcesFrom(undefined));
+    const limiter = new SourceRateLimiter(60_000, 1, 1, trustedRanges());
 
     expect(limiter.exceeded('203.0.113.1', 0)).toBe(false);
     expect(limiter.exceeded('203.0.113.1', 30_000)).toBe(true);

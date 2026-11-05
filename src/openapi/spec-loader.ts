@@ -1,5 +1,3 @@
-import { getServiceUrl } from '../config';
-
 // Minimal OpenAPI 3.0 types — only what we actually traverse
 export interface OpenApiSpec {
   paths: Record<string, PathItem>;
@@ -90,11 +88,12 @@ let specFetchPromise: Promise<OpenApiSpec> | null = null;
 // a single in-flight request rather than hammering the spec endpoint.
 // The cache expires after SPEC_TTL_MS so long-lived servers (e.g. Claude Desktop)
 // pick up spec changes without needing a restart.
-export async function getSpec(): Promise<OpenApiSpec> {
+// One cache per process is fine because the service URL is too.
+export async function getSpec(serviceUrl: string): Promise<OpenApiSpec> {
   if (cachedSpec && Date.now() - cachedAt < SPEC_TTL_MS) return cachedSpec;
 
   if (!specFetchPromise) {
-    specFetchPromise = fetchSpec()
+    specFetchPromise = fetchSpec(serviceUrl)
       .then(spec => {
         cachedSpec = spec;
         cachedAt = Date.now();
@@ -110,8 +109,8 @@ export async function getSpec(): Promise<OpenApiSpec> {
   return specFetchPromise;
 }
 
-async function fetchSpec(): Promise<OpenApiSpec> {
-  const res = await fetch(`${getServiceUrl()}/${SPEC_PATH}`);
+async function fetchSpec(serviceUrl: string): Promise<OpenApiSpec> {
+  const res = await fetch(`${serviceUrl}/${SPEC_PATH}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch Gremlin OpenAPI spec: HTTP ${res.status}`);
   }

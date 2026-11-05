@@ -45,14 +45,16 @@ const DEFAULT_LOG_LEVEL = DiagLogLevel.INFO;
  *
  * <p>Off unless `GREMLIN_MCP_ENABLE_TELEMETRY` is set, see docs/telemetry.md for what is supported.
  *
+ * @param enabled whether `GREMLIN_MCP_ENABLE_TELEMETRY` turned it on
+ *
  * <p>Telemetry is optional, so a configuration it cannot use turns it off rather than stopping the
  * server.
  *
  * @returns a function that exports what is pending and stops; a no-op when telemetry is off
  */
-export function startTelemetry(): () => Promise<void> {
+export function startTelemetry(enabled: boolean): () => Promise<void> {
   const off = async () => {};
-  if (!enabled() || getBooleanFromEnv('OTEL_SDK_DISABLED')) return off;
+  if (!enabled || getBooleanFromEnv('OTEL_SDK_DISABLED')) return off;
 
   diag.setLogger(
     stderrLogger(),
@@ -104,11 +106,6 @@ export function startTelemetry(): () => Promise<void> {
     diag.error('Telemetry is off: its configuration could not be used', err);
     return off;
   }
-}
-
-function enabled(): boolean {
-  const value = process.env.GREMLIN_MCP_ENABLE_TELEMETRY?.trim().toLowerCase();
-  return value === '1' || value === 'true';
 }
 
 function otlpExporter(): PushMetricExporter {
