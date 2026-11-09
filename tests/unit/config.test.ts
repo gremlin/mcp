@@ -182,10 +182,22 @@ describe('loadHostedConfig', () => {
     expect(config.app.resourceUrl).toBe('https://mcp.gremlin.com');
   });
 
-  it('rejects a resource identifier with a path, which discovery would never find', () => {
-    expect(
-      problems(() => loadHostedConfig({ ...HOSTED, GREMLIN_MCP_RESOURCE_URL: 'https://gremlin.com/mcp' })),
-    ).toEqual(['GREMLIN_MCP_RESOURCE_URL must be an origin with no path or query']);
+  it.each([
+    'https://gremlin.com/mcp',
+    'https://mcp.gremlin.com?',
+    'https://mcp.gremlin.com?x=1',
+    'https://mcp.gremlin.com#release',
+    'https://user:pass@mcp.gremlin.com',
+  ])('rejects %s as a resource identifier, which discovery would never find', (url) => {
+    // buildChallenge appends the metadata path, which a path, query or fragment would misplace.
+    expect(problems(() => loadHostedConfig({ ...HOSTED, GREMLIN_MCP_RESOURCE_URL: url }))).toEqual([
+      expect.stringMatching(/^GREMLIN_MCP_RESOURCE_URL must be a bare origin/),
+    ]);
+  });
+
+  it('accepts an origin with a port, as local development uses', () => {
+    const { config } = loadHostedConfig({ ...HOSTED, GREMLIN_MCP_RESOURCE_URL: 'http://localhost:8080' });
+    expect(config.app.resourceUrl).toBe('http://localhost:8080');
   });
 
   it('reports a malformed resource identifier once', () => {
@@ -194,7 +206,7 @@ describe('loadHostedConfig', () => {
     ]);
   });
 
-  it('never repeats a value in a problem, so a secret cannot leak through the logs', () => {
+  it('never repeats a URL or number value in a problem, so a misplaced secret stays out of the logs', () => {
     const secret = 'gremlin_osc_super_secret';
     const reported = problems(() =>
       loadHostedConfig({

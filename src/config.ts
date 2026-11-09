@@ -131,7 +131,8 @@ const sourceRanges = z
     const ranges: SourceRange[] = [];
     for (const entry of splitList(value)) {
       const range = parseSourceRange(entry);
-      // CIDRs are not secret, so naming the bad entry is safe and saves a hunt.
+      // The one setting whose errors name the value: an index into a list is slow to act on, and
+      // these ranges are not secret.
       if (range) ranges.push(range);
       else ctx.addIssue({ code: 'custom', message: `has "${entry}", which is not an IP address or CIDR range` });
     }
@@ -164,7 +165,10 @@ const hostedShape = {
    * discovery failure with no obvious cause. Host-only, because the metadata document is served at
    * the root and RFC 9728 would put an identifier with a path somewhere else.
    */
-  GREMLIN_MCP_RESOURCE_URL: httpUrl().refine(hasNoPath, 'must be an origin with no path or query'),
+  GREMLIN_MCP_RESOURCE_URL: httpUrl().refine(
+    isOrigin,
+    'must be a bare origin (scheme, host and optional port; no path, query, fragment or credentials)',
+  ),
   GREMLIN_AUTHORIZATION_SERVER: httpUrl().default(DEFAULT_AUTHORIZATION_SERVER),
   /** The audience requested when exchanging: the Gremlin API, distinct from this server. */
   GREMLIN_API_RESOURCE_URL: httpUrl().default(DEFAULT_AUTHORIZATION_SERVER),
@@ -280,11 +284,11 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+// Exact match, because even an empty `?` or `#` would swallow the metadata path appended to it.
 // zod still runs this after a failed URL check, which has already reported the problem.
-function hasNoPath(value: string): boolean {
+function isOrigin(value: string): boolean {
   try {
-    const { pathname, search } = new URL(value);
-    return pathname === '/' && !search;
+    return new URL(value).origin === value;
   } catch {
     return true;
   }

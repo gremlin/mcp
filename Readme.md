@@ -43,10 +43,6 @@ because the hosted config has no field for `GREMLIN_API_KEY`.
 Grouped by which entrypoint reads them. Nothing in the stdio column is read by the hosted
 server, and nothing in the hosted column is read by the stdio server.
 
-All are validated at startup ([`src/config.ts`](src/config.ts)). An invalid value stops the server
-with every problem listed at once; blank means unset. An unrecognised `GREMLIN_MCP_*` name or
-telemetry flag only warns.
-
 **Both**
 
 | Variable | Required | Default | Description |
