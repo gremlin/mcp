@@ -8,33 +8,36 @@ import { BlockList, isIP } from 'node:net';
  * per-source bound would make its users throttle each other. A trusted source gets a raised bound
  * of its own instead: still a wall between it and everyone else, sized for a crowd.
  *
- * <p>Read from `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS`, a comma-separated list of CIDR ranges or single
- * addresses. There is no compiled default -- which vendors a deployment fronts is not knowable at
- * build time -- and unset means no source is trusted. An entry that does not parse is skipped rather
- * than widened, so a typo fails closed: that range simply gets the ordinary bound.
+ * <p>Configured by `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS`. There is no compiled default -- which vendors
+ * a deployment fronts is not knowable at build time -- and unset means no source is trusted.
  */
-export function trustedSourcesFrom(value: string | undefined): BlockList {
+export function trustedSourcesFrom(ranges: SourceRange[]): BlockList {
   const trusted = new BlockList();
-  for (const entry of (value ?? '').split(',').map((e) => e.trim()).filter(Boolean)) {
-    const [address, prefix] = entry.split('/');
-    const family = isIP(address);
-    if (family === 0) {
-      process.stderr.write(`Ignoring unparseable trusted source "${entry}"\n`);
-      continue;
-    }
-    const type = family === 4 ? 'ipv4' : 'ipv6';
-    if (prefix === undefined) {
-      trusted.addAddress(address, type);
-      continue;
-    }
-    const bits = Number(prefix);
-    if (!Number.isInteger(bits) || bits < 0 || bits > (family === 4 ? 32 : 128)) {
-      process.stderr.write(`Ignoring unparseable trusted source "${entry}"\n`);
-      continue;
-    }
-    trusted.addSubnet(address, bits, type);
+  for (const { address, prefix, type } of ranges) {
+    if (prefix === undefined) trusted.addAddress(address, type);
+    else trusted.addSubnet(address, prefix, type);
   }
   return trusted;
+}
+
+export interface SourceRange {
+  address: string;
+  prefix?: number;
+  type: 'ipv4' | 'ipv6';
+}
+
+/** One CIDR range or single address, or undefined when it does not parse. */
+export function parseSourceRange(entry: string): SourceRange | undefined {
+  const [address, prefix, ...rest] = entry.split('/');
+  const family = isIP(address);
+  if (family === 0 || rest.length > 0) return undefined;
+  const type = family === 4 ? 'ipv4' : 'ipv6';
+  if (prefix === undefined) return { address, type };
+  const bits = Number(prefix);
+  if (prefix === '' || !Number.isInteger(bits) || bits < 0 || bits > (family === 4 ? 32 : 128)) {
+    return undefined;
+  }
+  return { address, prefix: bits, type };
 }
 
 /** Whether a source key is an address inside one of the trusted ranges. */
@@ -45,15 +48,6 @@ export function isTrustedSource(trusted: BlockList, source: string): boolean {
   const family = isIP(address);
   if (family === 0) return false;
   return trusted.check(address, family === 4 ? 'ipv4' : 'ipv6');
-}
-
-/**
- * A configured bound, or the fallback when the setting is missing, not a number, or not positive --
- * so a mistyped or zeroed variable cannot turn a bound off or refuse everyone.
- */
-export function positiveOr(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 /**

@@ -1,5 +1,42 @@
-import { describe, it, expect } from 'vitest';
-import { searchSpec, OpenApiSpec } from '../../src/openapi/spec-loader';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { getSpec, searchSpec, OpenApiSpec } from '../../src/openapi/spec-loader';
+
+describe('getSpec', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('caches per service URL, sharing one fetch between concurrent callers', async () => {
+    const fetch = vi.fn(async (url: string) => Response.json({ paths: { [url]: {} } }));
+    vi.stubGlobal('fetch', fetch);
+
+    const [a1, a2] = await Promise.all([
+      getSpec('https://a.example.com/v1'),
+      getSpec('https://a.example.com/v1'),
+    ]);
+    const b = await getSpec('https://b.example.com/v1');
+    const a3 = await getSpec('https://a.example.com/v1');
+
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://a.example.com/v1/openapi.json',
+      'https://b.example.com/v1/openapi.json',
+    ]);
+    expect(a1).toBe(a2);
+    expect(a3).toBe(a1);
+    expect(Object.keys(b.paths)).toEqual(['https://b.example.com/v1/openapi.json']);
+  });
+
+  it('retries after a failed fetch rather than caching the failure', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ paths: {} }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(getSpec('https://retry.example.com/v1')).rejects.toThrow('HTTP 503');
+    await expect(getSpec('https://retry.example.com/v1')).resolves.toEqual({ paths: {} });
+  });
+});
 
 // Minimal spec that mirrors the shapes we care about testing.
 const MOCK_SPEC: OpenApiSpec = {

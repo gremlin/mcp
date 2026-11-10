@@ -1,14 +1,8 @@
 import { createServer } from 'node:http';
 
 import { createMcpHttpApp, exchangeForApiCredential } from './http/app';
-import { positiveOr } from './http/source-limits';
+import { loadHostedConfig, loadOrExit } from './config';
 import { startTelemetry } from './telemetry';
-import {
-  getApiResourceIdentifier,
-  getAuthorizationServer,
-  getExchangeClientCredentials,
-  getResourceIdentifier,
-} from './auth/protected-resource';
 import { TokenExchanger } from './auth/token-exchange';
 
 /**
@@ -23,40 +17,37 @@ import { TokenExchanger } from './auth/token-exchange';
  * <p>This file is deliberately only wiring. Everything worth testing lives in `http/app.ts`.
  */
 
-// Fail at startup rather than on the first request: a resource identifier that does not match what
-// the authorization server audiences tokens for would otherwise surface as an authentication
-// failure with no obvious cause.
-const resourceIdentifier = getResourceIdentifier();
+// Every setting is checked before anything starts: a missing client secret or a mistyped resource
+// URL would otherwise surface as authorization failures with no obvious cause.
+const config = loadOrExit(loadHostedConfig);
 
-// Also at startup, for the same reason: without these this server cannot exchange a token, and
-// every request would fail authorization for a cause nothing in the logs would name.
-const { clientId, clientSecret } = getExchangeClientCredentials();
-
-const stopTelemetry = startTelemetry();
+const stopTelemetry = startTelemetry(config.telemetry);
 
 const exchanger = new TokenExchanger({
-  tokenEndpoint: `${getAuthorizationServer()}/v1/oauth2/token`,
-  clientId,
-  clientSecret,
-  targetResource: getApiResourceIdentifier(),
+  tokenEndpoint: `${config.app.authorizationServer}/v1/oauth2/token`,
+  clientId: config.oauthClientId,
+  clientSecret: config.oauthClientSecret,
+  targetResource: config.apiResourceUrl,
 });
 
 const app = createMcpHttpApp({
-  validateCredential: exchangeForApiCredential(exchanger),
+  config: config.app,
+  validateCredential: exchangeForApiCredential(exchanger, config.serviceUrl),
   reapCredentialCaches: () => exchanger.reapExpired(),
 });
 const httpServer = createServer((req, res) => app.handle(req, res));
 
-// Must exceed the idle timeout of any load balancer in front, or it can return 502s.
-const keepAliveTimeoutSeconds = positiveOr(process.env.GREMLIN_MCP_KEEP_ALIVE_TIMEOUT_SECONDS, 0);
-if (keepAliveTimeoutSeconds) httpServer.keepAliveTimeout = keepAliveTimeoutSeconds * 1000;
+if (config.keepAliveTimeoutSeconds) {
+  httpServer.keepAliveTimeout = config.keepAliveTimeoutSeconds * 1000;
+}
 
 const reaper = setInterval(() => app.reapIdleSessions(), 60_000);
 reaper.unref();
 
-const port = Number(process.env.PORT ?? 8080);
-httpServer.listen(port, () => {
-  process.stderr.write(`Gremlin MCP server listening on :${port} as ${resourceIdentifier}\n`);
+httpServer.listen(config.port, () => {
+  process.stderr.write(
+    `Gremlin MCP server listening on :${config.port} as ${config.app.resourceUrl}\n`,
+  );
 });
 
 async function shutdown(): Promise<void> {

@@ -72,18 +72,12 @@ export async function authorizationHeader(credential: GremlinCredential): Promis
 }
 
 /**
- * The credential for the locally-run server.
+ * The credential for the locally-run server, from `GREMLIN_API_KEY`.
  *
- * Reads the environment exactly once, at the call site that wants it, rather than deep inside the
- * request path. That matters: the hosted server must never fall back to a process-wide key, and the
- * only way to guarantee that structurally is for no code below this function to know the variable
- * exists.
+ * <p>Only the stdio config carries that key; the hosted config has no field for it, which is what
+ * keeps the hosted server from ever falling back to a process-wide credential.
  */
-export function apiKeyCredentialFromEnvironment(): GremlinCredential {
-  const value = process.env.GREMLIN_API_KEY;
-  if (!value) {
-    throw new Error('GREMLIN_API_KEY environment variable is required');
-  }
+export function apiKeyCredential(value: string): GremlinCredential {
   return { kind: 'apiKey', value };
 }
 

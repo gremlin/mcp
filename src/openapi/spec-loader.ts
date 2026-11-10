@@ -1,5 +1,3 @@
-import { getServiceUrl } from '../config';
-
 // Minimal OpenAPI 3.0 types — only what we actually traverse
 export interface OpenApiSpec {
   paths: Record<string, PathItem>;
@@ -82,36 +80,35 @@ const SPEC_PATH = 'openapi.json';
 const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch'] as const;
 const SPEC_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-let cachedSpec: OpenApiSpec | null = null;
-let cachedAt = 0;
-let specFetchPromise: Promise<OpenApiSpec> | null = null;
+// Keyed by service URL, so a spec is never served for a base URL it was not fetched from.
+const cachedSpecs = new Map<string, { spec: OpenApiSpec; at: number }>();
+const inFlight = new Map<string, Promise<OpenApiSpec>>();
 
 // Lazily fetches and caches the Gremlin OpenAPI spec. Concurrent callers share
 // a single in-flight request rather than hammering the spec endpoint.
 // The cache expires after SPEC_TTL_MS so long-lived servers (e.g. Claude Desktop)
 // pick up spec changes without needing a restart.
-export async function getSpec(): Promise<OpenApiSpec> {
-  if (cachedSpec && Date.now() - cachedAt < SPEC_TTL_MS) return cachedSpec;
+export async function getSpec(serviceUrl: string): Promise<OpenApiSpec> {
+  const cached = cachedSpecs.get(serviceUrl);
+  if (cached && Date.now() - cached.at < SPEC_TTL_MS) return cached.spec;
 
-  if (!specFetchPromise) {
-    specFetchPromise = fetchSpec()
+  let pending = inFlight.get(serviceUrl);
+  if (!pending) {
+    pending = fetchSpec(serviceUrl)
       .then(spec => {
-        cachedSpec = spec;
-        cachedAt = Date.now();
-        specFetchPromise = null;
+        cachedSpecs.set(serviceUrl, { spec, at: Date.now() });
         return spec;
       })
-      .catch(err => {
-        specFetchPromise = null; // allow retry on next call
-        throw err;
-      });
+      // Cleared on failure too, so the next call retries.
+      .finally(() => inFlight.delete(serviceUrl));
+    inFlight.set(serviceUrl, pending);
   }
 
-  return specFetchPromise;
+  return pending;
 }
 
-async function fetchSpec(): Promise<OpenApiSpec> {
-  const res = await fetch(`${getServiceUrl()}/${SPEC_PATH}`);
+async function fetchSpec(serviceUrl: string): Promise<OpenApiSpec> {
+  const res = await fetch(`${serviceUrl}/${SPEC_PATH}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch Gremlin OpenAPI spec: HTTP ${res.status}`);
   }

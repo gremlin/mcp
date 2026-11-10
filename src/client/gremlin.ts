@@ -1,5 +1,4 @@
 import TTLCache from '@isaacs/ttlcache';
-import { getServiceUrl } from '../config';
 import { authorizationHeader, type GremlinCredential } from '../auth/credential';
 import { meteredFetch } from '../metrics';
 
@@ -316,8 +315,7 @@ function buildHttpError(status: number, body: string): GremlinApiError {
 }
 
 export class GremlinApi {
-  private baseUrl: string = getServiceUrl();
-  private userAgent = "@gremlin/gremlin-mcp/2.7.0";
+  private userAgent = "@gremlin/gremlin-mcp/2.8.0";
   private fetch = meteredFetch();
 
   /**
@@ -334,9 +332,13 @@ export class GremlinApi {
    * @param credential whose access this instance acts with. Required, and deliberately so: in the
    *     hosted server there is no correct process-wide default, and a parameter that can be
    *     omitted is one that will be. The locally-run server passes
-   *     {@link apiKeyCredentialFromEnvironment} explicitly.
+   *     {@link apiKeyCredential} explicitly.
+   * @param serviceUrl the Gremlin API base URL, including the version prefix (`GREMLIN_SERVICE_URL`)
    */
-  constructor(private readonly credential: GremlinCredential) {}
+  constructor(
+    private readonly credential: GremlinCredential,
+    readonly serviceUrl: string,
+  ) {}
 
   async listUsers(): Promise<User[]> {
     return this.jsonRequestWithRetry<User[]>('users', {
@@ -641,7 +643,7 @@ export class GremlinApi {
   }
 
   private buildUrl(path: string, params?: Record<string, any>): string {
-    const url = new URL(`${this.baseUrl}/${path}`);
+    const url = new URL(`${this.serviceUrl}/${path}`);
     if (params) {
       Object.keys(params).forEach(key => url.searchParams.append(key, String(params[key])));
     }

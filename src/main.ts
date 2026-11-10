@@ -1,6 +1,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-import { apiKeyCredentialFromEnvironment } from './auth/credential';
+import { apiKeyCredential } from './auth/credential';
+import { loadOrExit, loadStdioConfig } from './config';
 import { createMcpMetrics } from './metrics';
 import { createGremlinMcpServer } from './server';
 import { startTelemetry } from './telemetry';
@@ -14,19 +15,10 @@ import { isRegisteredTool } from './tools/index';
  * (`src/http.ts`) rather than a mode of this one, so that neither can quietly acquire the other's
  * authentication model.
  */
-function readCredentialOrExit() {
-  try {
-    return apiKeyCredentialFromEnvironment();
-  } catch (error) {
-    process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  }
-}
+const config = loadOrExit(loadStdioConfig);
+startTelemetry(config.telemetry);
 
-const credential = readCredentialOrExit();
-startTelemetry();
-
-const server = createGremlinMcpServer(credential);
+const server = createGremlinMcpServer(apiKeyCredential(config.apiKey), config.serviceUrl);
 const transport = new StdioServerTransport();
 server.connect(transport).then(() =>
   createMcpMetrics('stdio').observeOperations(transport, isRegisteredTool),

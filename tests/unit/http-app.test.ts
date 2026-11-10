@@ -10,6 +10,7 @@ import {
   type ValidationOutcome,
 } from '../../src/http/app';
 import { PROTECTED_RESOURCE_PATH } from '../../src/auth/protected-resource';
+import { DEFAULT_SERVICE_URL, loadHostedConfig, type Env } from '../../src/config';
 
 import {
   authorizationHeader,
@@ -62,8 +63,17 @@ async function startApp(
   // Each distinct token resolves to its own subject by default, which is what the production
   // validator does for distinct users. Tests that care about rotation or sharing override it.
   validateCredential: CredentialValidator = async (accessToken) => ok(`subject-for-${accessToken}`),
+  // Goes through the real loader, so these tests exercise the same parsing production does.
+  env: Env = {},
 ) {
+  const { config } = loadHostedConfig({
+    GREMLIN_MCP_RESOURCE_URL: RESOURCE,
+    GREMLIN_MCP_OAUTH_CLIENT_ID: 'test-client',
+    GREMLIN_MCP_OAUTH_CLIENT_SECRET: 'test-secret',
+    ...env,
+  });
   const app = createMcpHttpApp({
+    config: config.app,
     ...(factory ? { createServerForCredential: factory } : {}),
     validateCredential,
   });
@@ -144,17 +154,11 @@ const callWhoami = (id: number) => ({
 });
 
 describe('MCP HTTP app', () => {
-  const saved = { ...process.env };
   let harness: Awaited<ReturnType<typeof startApp>> | undefined;
-
-  beforeEach(() => {
-    process.env.GREMLIN_MCP_RESOURCE_URL = RESOURCE;
-  });
 
   afterEach(async () => {
     await harness?.stop();
     harness = undefined;
-    process.env = { ...saved };
   });
 
   describe('discovery bootstrap', () => {
@@ -420,7 +424,7 @@ describe('MCP HTTP app', () => {
       harness = await startApp(
         (credential) => {
           built.push(credential);
-          return createGremlinMcpServer(credential);
+          return createGremlinMcpServer(credential, DEFAULT_SERVICE_URL);
         },
         // Each token exchanges to its own upstream credential, as the real validator does.
         async (accessToken) => ({
@@ -486,9 +490,8 @@ describe('MCP HTTP app', () => {
       // A flood of distinct junk tokens used to cost one token exchange each, all under this
       // server's one client identity -- so one caller could spend the budget every user's exchanges
       // share. A source over its bound is refused here and the validator is never called.
-      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '5';
       const validate = vi.fn<CredentialValidator>(async () => ({ status: 'invalid' }));
-      harness = await startApp(undefined, validate);
+      harness = await startApp(undefined, validate, { GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE: '5' });
       const statuses: number[] = [];
 
       for (let i = 0; i < 12; i++) {
@@ -502,10 +505,11 @@ describe('MCP HTTP app', () => {
     });
 
     it("keeps one source's flood from throttling another source", async () => {
-      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '3';
       // Junk is rejected; the bystander's real token is accepted.
-      harness = await startApp(undefined, async (token) =>
-        token === TOKEN_B ? ok('bystander') : { status: 'invalid' },
+      harness = await startApp(
+        undefined,
+        async (token) => (token === TOKEN_B ? ok('bystander') : { status: 'invalid' }),
+        { GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE: '3' },
       );
 
       for (let i = 0; i < 10; i++) {
@@ -519,8 +523,7 @@ describe('MCP HTTP app', () => {
     it('never throttles a credential it has already validated', async () => {
       // Only a cache miss goes upstream, so only a miss is counted: a known user keeps working
       // even while its own source is over the bound.
-      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '2';
-      harness = await startApp();
+      harness = await startApp(undefined, undefined, { GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE: '2' });
 
       expect((await fromSource(harness.origin, '203.0.113.60', TOKEN_A)).status).toBe(200);
       await fromSource(harness.origin, '203.0.113.60', 'gremlin_oat_other_1');
@@ -533,12 +536,13 @@ describe('MCP HTTP app', () => {
     it('gives a configured trusted source a larger allowance for both bounds', async () => {
       // An LLM vendor's users all arrive from a few addresses; the ordinary bound would make them
       // throttle each other. A trusted range gets its own raised bound instead.
-      process.env.GREMLIN_MCP_TRUSTED_SOURCE_CIDRS = '198.51.100.0/24';
-      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE = '2';
-      process.env.GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED = '30';
-      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE = '2';
-      process.env.GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED = '30';
-      harness = await startApp();
+      harness = await startApp(undefined, undefined, {
+        GREMLIN_MCP_TRUSTED_SOURCE_CIDRS: '198.51.100.0/24',
+        GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE: '2',
+        GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED: '30',
+        GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE: '2',
+        GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED: '30',
+      });
       const vendor: number[] = [];
       const other: number[] = [];
 
@@ -636,8 +640,7 @@ describe('MCP HTTP app', () => {
     }
 
     it('counts each rejection by reason and whether the source is trusted', async () => {
-      process.env.GREMLIN_MCP_TRUSTED_SOURCE_CIDRS = '203.0.113.0/24';
-      harness = await startApp();
+      harness = await startApp(undefined, undefined, { GREMLIN_MCP_TRUSTED_SOURCE_CIDRS: '203.0.113.0/24' });
 
       await mcpRequest(harness.origin, {});
       await fetch(`${harness.origin}/mcp`, {

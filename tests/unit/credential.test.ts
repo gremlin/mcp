@@ -1,7 +1,7 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 import {
-  apiKeyCredentialFromEnvironment,
+  apiKeyCredential,
   authorizationHeader,
   credentialFingerprint,
   credentialSlot,
@@ -69,22 +69,9 @@ describe('credentialFingerprint', () => {
   });
 });
 
-describe('apiKeyCredentialFromEnvironment', () => {
-  const original = process.env.GREMLIN_API_KEY;
-
-  afterEach(() => {
-    if (original === undefined) delete process.env.GREMLIN_API_KEY;
-    else process.env.GREMLIN_API_KEY = original;
-  });
-
-  it('reads the key from the environment', () => {
-    process.env.GREMLIN_API_KEY = 'from-env';
-    expect(apiKeyCredentialFromEnvironment()).toEqual({ kind: 'apiKey', value: 'from-env' });
-  });
-
-  it('throws rather than yielding a credential with no key', () => {
-    delete process.env.GREMLIN_API_KEY;
-    expect(() => apiKeyCredentialFromEnvironment()).toThrow(/GREMLIN_API_KEY/);
+describe('apiKeyCredential', () => {
+  it('wraps the configured key', () => {
+    expect(apiKeyCredential('from-config')).toEqual({ kind: 'apiKey', value: 'from-config' });
   });
 });
 

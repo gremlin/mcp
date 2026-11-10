@@ -1,6 +1,7 @@
 import type { Histogram } from '@opentelemetry/sdk-metrics';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GremlinApi, GremlinApiError, isJsonContentTypeHeader } from '../../src/client/gremlin';
+import { DEFAULT_SERVICE_URL } from '../../src/config';
 import type { GremlinCredential } from '../../src/auth/credential';
 import { collectMetrics } from './metric-reader';
 
@@ -41,7 +42,7 @@ describe('GremlinApi#execute (backs the read/create/update/delete API tools)', (
   let api: GremlinApi;
 
   beforeEach(() => {
-    api = new GremlinApi(TEST_CREDENTIAL);
+    api = new GremlinApi(TEST_CREDENTIAL, DEFAULT_SERVICE_URL);
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -163,7 +164,7 @@ describe('GremlinApi typed methods (JSON-only endpoints)', () => {
   let api: GremlinApi;
 
   beforeEach(() => {
-    api = new GremlinApi(TEST_CREDENTIAL);
+    api = new GremlinApi(TEST_CREDENTIAL, DEFAULT_SERVICE_URL);
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -271,7 +272,7 @@ describe('GremlinApi reliability-test run endpoints use /delegate', () => {
   let api: GremlinApi;
 
   beforeEach(() => {
-    api = new GremlinApi(TEST_CREDENTIAL);
+    api = new GremlinApi(TEST_CREDENTIAL, DEFAULT_SERVICE_URL);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(200, '{"items":[]}')));
   });
 
@@ -308,7 +309,7 @@ describe('GremlinApiError classification', () => {
   let api: GremlinApi;
 
   beforeEach(() => {
-    api = new GremlinApi(TEST_CREDENTIAL);
+    api = new GremlinApi(TEST_CREDENTIAL, DEFAULT_SERVICE_URL);
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -408,7 +409,7 @@ describe('GremlinApi metrics', () => {
   it('records every attempt, so retries count, without the path', async () => {
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse(500, 'boom'));
 
-    await new GremlinApi(TEST_CREDENTIAL).execute('GET', 'services/abc-123').catch(() => {});
+    await new GremlinApi(TEST_CREDENTIAL, DEFAULT_SERVICE_URL).execute('GET', 'services/abc-123').catch(() => {});
 
     const points = await collected.points('http.client.request.duration');
     expect(points.map((point) => point.attributes)).toEqual([

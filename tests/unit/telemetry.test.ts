@@ -66,7 +66,7 @@ describe('startTelemetry', () => {
   beforeEach(async () => {
     // Isolate from whatever telemetry configuration the machine running the tests has.
     for (const name of Object.keys(process.env)) {
-      if (name.startsWith('OTEL_') || name === 'GREMLIN_MCP_ENABLE_TELEMETRY') vi.stubEnv(name, '');
+      if (name.startsWith('OTEL_')) vi.stubEnv(name, '');
     }
     collector = await startCollector();
     vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', collector.endpoint);
@@ -80,18 +80,17 @@ describe('startTelemetry', () => {
     await collector.stop();
   });
 
-  it('does nothing unless GREMLIN_MCP_ENABLE_TELEMETRY is set, even with an endpoint', async () => {
-    await startTelemetry()();
+  it('does nothing unless enabled, even with an endpoint', async () => {
+    await startTelemetry(false)();
 
     expect(metrics.getMeterProvider()).not.toBeInstanceOf(MeterProvider);
     expect(collector.exports).toEqual([]);
   });
 
   it('exports the service identity and runtime metrics when enabled', async () => {
-    vi.stubEnv('GREMLIN_MCP_ENABLE_TELEMETRY', '1');
     vi.stubEnv('OTEL_EXPORTER_OTLP_PROTOCOL', 'http/json');
 
-    const stop = startTelemetry();
+    const stop = startTelemetry(true);
     // Long enough for the event loop delay monitor to take samples.
     await new Promise((resolve) => setTimeout(resolve, 100));
     await stop();
@@ -111,9 +110,8 @@ describe('startTelemetry', () => {
   });
 
   it('defaults to OTLP over HTTP/protobuf', async () => {
-    vi.stubEnv('GREMLIN_MCP_ENABLE_TELEMETRY', 'true');
 
-    await startTelemetry()();
+    await startTelemetry(true)();
 
     expect(collector.exports.map((e) => e.contentType)).toEqual(['application/x-protobuf']);
   });
@@ -122,21 +120,19 @@ describe('startTelemetry', () => {
     ['OTEL_SDK_DISABLED', 'true'],
     ['OTEL_METRICS_EXPORTER', 'none'],
   ])('stays off when %s=%s', async (name, value) => {
-    vi.stubEnv('GREMLIN_MCP_ENABLE_TELEMETRY', '1');
     vi.stubEnv(name, value);
 
-    await startTelemetry()();
+    await startTelemetry(true)();
 
     expect(metrics.getMeterProvider()).not.toBeInstanceOf(MeterProvider);
     expect(collector.exports).toEqual([]);
   });
 
   it('lets OTEL_SERVICE_NAME override the service name', async () => {
-    vi.stubEnv('GREMLIN_MCP_ENABLE_TELEMETRY', '1');
     vi.stubEnv('OTEL_EXPORTER_OTLP_PROTOCOL', 'http/json');
     vi.stubEnv('OTEL_SERVICE_NAME', 'mcp-staging');
 
-    await startTelemetry()();
+    await startTelemetry(true)();
 
     expect(collector.exports[0].resource?.['service.name']).toBe('mcp-staging');
   });
@@ -144,11 +140,10 @@ describe('startTelemetry', () => {
   it('writes its own logs to stderr, never stdout', async () => {
     const stdout = vi.spyOn(process.stdout, 'write');
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    vi.stubEnv('GREMLIN_MCP_ENABLE_TELEMETRY', '1');
     vi.stubEnv('OTEL_EXPORTER_OTLP_PROTOCOL', 'grpc');
     vi.stubEnv('OTEL_LOG_LEVEL', 'debug');
 
-    const stop = startTelemetry();
+    const stop = startTelemetry(true);
     // The stock console logger sends these two levels to stdout.
     diag.info('probe');
     diag.debug('probe');
@@ -164,10 +159,9 @@ describe('startTelemetry', () => {
 
   it('turns off instead of throwing on a configuration it cannot use', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    vi.stubEnv('GREMLIN_MCP_ENABLE_TELEMETRY', '1');
     vi.stubEnv('OTEL_METRIC_EXPORT_INTERVAL', '0');
 
-    await startTelemetry()();
+    await startTelemetry(true)();
 
     expect(metrics.getMeterProvider()).not.toBeInstanceOf(MeterProvider);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Telemetry is off'));

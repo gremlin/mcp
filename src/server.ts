@@ -7,7 +7,7 @@ import { registerTools } from './tools/index.js';
 import type { GremlinCredential } from './auth/credential';
 
 export const SERVER_NAME = 'Gremlin Inc Server';
-export const SERVER_VERSION = '2.7.0';
+export const SERVER_VERSION = '2.8.0';
 
 /**
  * Builds a fully-registered MCP server bound to exactly one credential.
@@ -22,13 +22,13 @@ export const SERVER_VERSION = '2.7.0';
  * would therefore not merely risk a leak; it would guarantee one, because the cache is keyed on URL
  * alone and would answer the second user's request with the first user's data.
  */
-export function createGremlinMcpServer(credential: GremlinCredential): McpServer {
+export function createGremlinMcpServer(credential: GremlinCredential, serviceUrl: string): McpServer {
   const server = new McpServer({
     name: SERVER_NAME,
     version: SERVER_VERSION,
   });
 
-  const api = new GremlinApi(credential);
+  const api = new GremlinApi(credential, serviceUrl);
 
   registerResources(server, api);
   registerTools(server, api);

@@ -36,7 +36,7 @@ programs rather than two modes of one:
 
 This is the deployment customers run themselves, and the one Private Edition uses. It is
 unaffected by the hosted server: the hosted path never falls back to a process-wide credential,
-because nothing below `apiKeyCredentialFromEnvironment` knows `GREMLIN_API_KEY` exists.
+because the hosted config has no field for `GREMLIN_API_KEY`.
 
 ### Environment Variables
 
@@ -54,7 +54,7 @@ server, and nothing in the hosted column is read by the stdio server.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `GREMLIN_API_KEY` | **Yes** | — | Your Gremlin API key. The server exits immediately if this is missing. Not read by the hosted server. |
+| `GREMLIN_API_KEY` | **Yes** | — | Your Gremlin API key. The server exits immediately if this is missing. Ignored, with a warning, by the hosted server. |
 
 **Hosted — OAuth** (`build/http.mjs`)
 
@@ -72,7 +72,7 @@ server, and nothing in the hosted column is read by the stdio server.
 | `GREMLIN_MCP_MAX_NEW_SESSIONS_PER_MINUTE_TRUSTED` | No | `1000` | The same cap for a source in `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS`. |
 | `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE` | No | `60` | Per-source cap on credential validations that go to the authorization server; excess gets `429` before any upstream call. Only a cache miss counts: a credential validated in the last minute, and every request on an established session, never do. |
 | `GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED` | No | `3000` | The same cap for a trusted source. Kept below the authorization server's per-client bound, so no single source can spend all of it. |
-| `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS` | No | *(none)* | Comma-separated CIDR ranges or addresses whose traffic is many users rather than one caller — an LLM vendor's egress, such as Anthropic's `160.79.104.0/21` for Claude's hosted surfaces. They get the `_TRUSTED` bounds. Unset trusts nothing; an entry that does not parse is skipped, so a typo fails closed. |
+| `GREMLIN_MCP_TRUSTED_SOURCE_CIDRS` | No | *(none)* | Comma-separated CIDR ranges or addresses whose traffic is many users rather than one caller — an LLM vendor's egress, such as Anthropic's `160.79.104.0/21` for Claude's hosted surfaces. They get the `_TRUSTED` bounds. Unset trusts nothing; an entry that does not parse stops startup. |
 | `GREMLIN_MCP_ALLOWED_ORIGINS` | No | *(none)* | Comma-separated browser origins permitted to call `/mcp`. Requests with no `Origin` are allowed — the legitimate caller is a server, not a browser — and any present value must be listed. Only needed for local development against a browser-based MCP client. |
 
 ### Deploying the hosted server
