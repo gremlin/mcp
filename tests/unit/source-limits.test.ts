@@ -9,7 +9,13 @@ import {
 } from '../../src/http/source-limits';
 
 function trustedRanges(...entries: string[]) {
-  return trustedSourcesFrom(entries.map((entry) => parseSourceRange(entry) as SourceRange));
+  return trustedSourcesFrom(
+    entries.map((entry): SourceRange => {
+      const range = parseSourceRange(entry);
+      if (!range) throw new Error(`Test range "${entry}" does not parse`);
+      return range;
+    }),
+  );
 }
 
 describe('trusted sources', () => {
