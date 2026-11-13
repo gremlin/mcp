@@ -315,7 +315,7 @@ function buildHttpError(status: number, body: string): GremlinApiError {
 }
 
 export class GremlinApi {
-  private userAgent = "@gremlin/gremlin-mcp/2.8.0";
+  private userAgent = "@gremlin/gremlin-mcp/2.8.1";
   private fetch = meteredFetch();
 
   /**
