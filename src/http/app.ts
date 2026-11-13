@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import z from 'zod';
 
 import {
   credentialFingerprint,
@@ -21,6 +22,7 @@ import {
 import { GremlinApi, GremlinApiError } from '../client/gremlin';
 import { createMcpMetrics, type RejectionReason, type SessionEndReason } from '../metrics';
 import { createGremlinMcpServer } from '../server';
+import { MemoryStore, type SharedStore } from '../shared-store';
 import { isRegisteredTool } from '../tools/index';
 import { isTrustedSource, SourceRateLimiter } from './source-limits';
 
@@ -219,8 +221,12 @@ function sendUnauthorized(
 export type ServerFactory = (credential: GremlinCredential) => McpServer;
 
 /**
- * Turns a client's access token into a credential this server may use, or explains why it cannot.
- * Injectable so tests need no network.
+ * Says who a client's access token belongs to, or why it cannot be used. Injectable so tests need
+ * no network.
+ *
+ * <p>Returns plain data, never the credential itself, so an outcome can be cached in a
+ * {@link SharedStore} and read back by any instance. The credential comes from
+ * {@link CredentialFactory}.
  *
  * <p>The outcomes stay distinct because Claude reacts to each differently; see {@link
  * ExchangeFailure}. A transport failure or a 5xx is not evidence about the token, so it must never
@@ -229,10 +235,20 @@ export type ServerFactory = (credential: GremlinCredential) => McpServer;
 export type CredentialValidator = (accessToken: string) => Promise<ValidationOutcome>;
 
 export type ValidationOutcome =
-  | { status: 'ok'; identity: CredentialIdentity; credential: GremlinCredential }
+  | { status: 'ok'; identity: CredentialIdentity }
   | { status: 'invalid' }
   | { status: 'forbidden' }
   | { status: 'unavailable' };
+
+/** What a cached outcome must look like; anything else in the store is treated as a miss. */
+const CachedOutcome = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), identity: z.object({ subject: z.string() }) }),
+  z.object({ status: z.literal('invalid') }),
+  z.object({ status: z.literal('forbidden') }),
+]);
+
+/** The credential a validated access token acts with. Cheap and deterministic, so built per request. */
+export type CredentialFactory = (accessToken: string) => GremlinCredential;
 
 /**
  * Who a credential belongs to.
@@ -250,7 +266,7 @@ export interface CredentialIdentity {
 }
 
 /**
- * Exchanges the client's token for one of our own, then asks who it belongs to.
+ * Validation and credentials backed by RFC 8693 exchange.
  *
  * <p>The exchange is the validation: the authorization server refuses a token that is expired,
  * revoked, or minted elsewhere, so success is proof of all three without ever *using* the client's
@@ -261,18 +277,9 @@ export interface CredentialIdentity {
 export function exchangeForApiCredential(
   exchanger: TokenExchanger,
   serviceUrl: string,
-): CredentialValidator {
-  return async (accessToken) => {
-    const exchanged = await exchanger.exchange(accessToken);
-    if (!exchanged.ok) {
-      return exchanged.reason === 'invalid'
-        ? { status: 'invalid' }
-        : exchanged.reason === 'forbidden'
-          ? { status: 'forbidden' }
-          : { status: 'unavailable' };
-    }
-
-    const credential = delegatedCredential(accessToken, async () => {
+): { validateCredential: CredentialValidator; credentialFor: CredentialFactory } {
+  const credentialFor: CredentialFactory = (accessToken) =>
+    delegatedCredential(accessToken, async () => {
       const current = await exchanger.exchange(accessToken);
       if (!current.ok) {
         throw new GremlinApiError('Token exchange failed', {
@@ -284,15 +291,26 @@ export function exchangeForApiCredential(
       return current.accessToken;
     });
 
+  const validateCredential: CredentialValidator = async (accessToken) => {
+    const exchanged = await exchanger.exchange(accessToken);
+    if (!exchanged.ok) {
+      return exchanged.reason === 'invalid'
+        ? { status: 'invalid' }
+        : exchanged.reason === 'forbidden'
+          ? { status: 'forbidden' }
+          : { status: 'unavailable' };
+    }
+
+    const credential = credentialFor(accessToken);
     try {
       const self = await new GremlinApi(credential, serviceUrl).getSelf();
-      return { status: 'ok', identity: { subject: `${self.company_id}:${self.user_id}` }, credential };
+      return { status: 'ok', identity: { subject: `${self.company_id}:${self.user_id}` } };
     } catch (error) {
       const status = error instanceof GremlinApiError ? error.statusCode : undefined;
       if (status === 401 || status === 403) {
         // The exchange succeeded but the derived token was refused -- an upstream disagreement,
         // not a verdict on the client's token, which the authorization server already accepted.
-        exchanger.forget(accessToken);
+        await exchanger.forget(accessToken);
         return { status: 'unavailable' };
       }
       return {
@@ -301,10 +319,21 @@ export function exchangeForApiCredential(
         // the credential's fingerprint costs surviving a refresh, but the alternative is refusing
         // a user whose connector is working.
         identity: { subject: credentialFingerprint(credential) },
-        credential,
       };
     }
   };
+
+  return { validateCredential, credentialFor };
+}
+
+function readCachedOutcome(value: string | undefined): ValidationOutcome | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const parsed = CachedOutcome.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface McpHttpApp {
@@ -319,13 +348,18 @@ export function createMcpHttpApp(
     config,
     createServerForCredential = (credential) => createGremlinMcpServer(credential, config.serviceUrl),
     validateCredential,
-    reapCredentialCaches = () => {},
+    credentialFor,
+    store = new MemoryStore(),
   }: {
     config: HttpAppConfig;
     createServerForCredential?: ServerFactory;
     validateCredential: CredentialValidator;
-    /** Swept on the same tick as idle sessions; see {@link TokenExchanger.reapExpired}. */
-    reapCredentialCaches?: () => void;
+    credentialFor: CredentialFactory;
+    /**
+     * Holds validation outcomes and the validation rate counters. Shared across instances when it
+     * is Redis, so both cost one upstream probe and one bound for the fleet. Swept on the reaper tick.
+     */
+    store?: SharedStore;
   },
 ): McpHttpApp {
   const sessions = new Map<string, Session>();
@@ -340,21 +374,23 @@ export function createMcpHttpApp(
     telemetry.sessionEnded(session.startedAt, reason);
   }
 
-  /**
-   * Validation outcomes keyed by credential fingerprint, with the time they were recorded.
-   *
-   * <p>Per-instance for the same reason the rate counters are.
-   */
-  const validated = new Map<string, { outcome: ValidationOutcome; at: number }>();
+  // Session setup bounds this instance's own allocations, so its counters never leave the process.
+  const localStore = new MemoryStore();
 
   const { trustedSources } = config;
+  // Shared, because the budget it protects is: every instance's exchanges leave under this
+  // server's one client identity.
   const validationLimiter = new SourceRateLimiter(
+    'validation',
+    store,
     RATE_WINDOW_MS,
     config.maxValidationsPerMinute,
     config.maxValidationsPerMinuteTrusted,
     trustedSources,
   );
   const newSessionLimiter = new SourceRateLimiter(
+    'session',
+    localStore,
     RATE_WINDOW_MS,
     config.maxNewSessionsPerMinute,
     config.maxNewSessionsPerMinuteTrusted,
@@ -382,13 +418,12 @@ export function createMcpHttpApp(
     fingerprint: string,
     source: string,
   ): Promise<ValidationOutcome | { status: 'throttled' }> {
-    const cached = validated.get(fingerprint);
-    if (cached && Date.now() - cached.at < VALIDATION_TTL_MS) {
-      return cached.outcome;
-    }
+    const key = `val:${fingerprint}`;
+    const cached = readCachedOutcome(await store.get(key));
+    if (cached) return cached;
     // Only a miss goes upstream, so only a miss is counted -- and it is counted before the call, so
     // a source over its bound costs the authorization server nothing.
-    if (validationLimiter.exceeded(source, Date.now())) {
+    if (await validationLimiter.exceeded(source, Date.now())) {
       return { status: 'throttled' };
     }
 
@@ -396,19 +431,16 @@ export function createMcpHttpApp(
     // `unavailable` says nothing about the token, so caching it would extend an
     // authorization-server blip into a longer outage of our own.
     if (outcome.status !== 'unavailable') {
-      validated.set(fingerprint, { outcome, at: Date.now() });
+      await store.set(key, JSON.stringify(outcome), VALIDATION_TTL_MS);
     }
     return outcome;
   }
 
   function reapIdleSessions(): void {
-    reapCredentialCaches();
-    // The validation cache is swept on the same tick, so it cannot grow without bound under a
-    // flood of distinct tokens -- which is the very traffic this cache exists to absorb.
-    const validationCutoff = Date.now() - VALIDATION_TTL_MS;
-    for (const [fingerprint, entry] of validated) {
-      if (entry.at < validationCutoff) validated.delete(fingerprint);
-    }
+    // The caches are swept on the same tick, so they cannot grow without bound under a flood of
+    // distinct tokens -- which is the very traffic the validation cache exists to absorb.
+    store.sweep();
+    localStore.sweep();
 
     const cutoff = Date.now() - SESSION_IDLE_TIMEOUT_MS;
     for (const [id, session] of sessions) {
@@ -495,7 +527,8 @@ export function createMcpHttpApp(
       });
       return;
     }
-    const { identity, credential } = outcome;
+    const { identity } = outcome;
+    const credential = credentialFor(token);
 
     if (sessionId) {
       const existing = sessions.get(sessionId);
@@ -539,7 +572,7 @@ export function createMcpHttpApp(
 
     // No session id: a fresh initialize, which is the expensive path. Both bounds below run before
     // anything is allocated.
-    if (newSessionLimiter.exceeded(source, Date.now())) {
+    if (await newSessionLimiter.exceeded(source, Date.now())) {
       reject('throttled_session');
       sendJson(
         res,

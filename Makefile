@@ -49,12 +49,20 @@ ci-install:
 typecheck:
 	npx tsc --noEmit
 
+# The hosted server bundles @redis/client, which is CommonJS and calls require() on Node builtins.
+# An ESM bundle has no require, so give it one.
+define HTTP_BANNER
+#!/usr/bin/env node
+import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);
+endef
+export HTTP_BANNER
+
 # Two entry points: the stdio server for local clients, and the hosted HTTP server.
 bundle:
 	npx esbuild src/main.ts --bundle --platform=node --format=esm \
 		--banner:js='#!/usr/bin/env node' --outfile=build/main.mjs
 	npx esbuild src/http.ts --bundle --platform=node --format=esm \
-		--banner:js='#!/usr/bin/env node' --outfile=build/http.mjs
+		--banner:js="$$HTTP_BANNER" --outfile=build/http.mjs
 	chmod +x build/main.mjs build/http.mjs
 
 compile: typecheck bundle

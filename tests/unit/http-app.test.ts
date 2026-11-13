@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
   createMcpHttpApp,
+  type CredentialFactory,
   type CredentialValidator,
   type ServerFactory,
   type ValidationOutcome,
@@ -20,6 +21,7 @@ import {
 } from '../../src/auth/credential';
 import type { GremlinCredential } from '../../src/auth/credential';
 import { createGremlinMcpServer } from '../../src/server';
+import { MemoryStore, type SharedStore } from '../../src/shared-store';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { collectMetrics } from './metric-reader';
 
@@ -38,21 +40,19 @@ const INITIALIZE = {
   },
 };
 
-/**
- * A successful validation, in the shape the app expects.
- *
- * The credential is delegated, as the real validator's always is: it is the only kind a session
- * accepts, because the token that goes upstream is always an exchanged one (design invariant 13).
- * `resolve` returns a stand-in for the exchanged token rather than calling an authorization
- * server -- no request in these tests reaches either upstream.
- */
+/** A successful validation, in the shape the app expects. */
 function ok(subject: string): ValidationOutcome {
-  return {
-    status: 'ok',
-    identity: { subject },
-    credential: delegatedCredential(`client-token-for-${subject}`, async () => `exchanged-for-${subject}`),
-  };
+  return { status: 'ok', identity: { subject } };
 }
+
+/**
+ * The credential is delegated, as the real one always is: it is the only kind a session accepts,
+ * because the token that goes upstream is always an exchanged one (design invariant 13). `resolve`
+ * returns a stand-in for the exchanged token rather than calling an authorization server -- no
+ * request in these tests reaches either upstream.
+ */
+const exchangedFor: CredentialFactory = (accessToken) =>
+  delegatedCredential(accessToken, async () => `exchanged-for-${accessToken}`);
 
 /** Stands up the app on a real socket, so the assertions cover actual HTTP rather than a mock. */
 async function startApp(
@@ -65,6 +65,7 @@ async function startApp(
   validateCredential: CredentialValidator = async (accessToken) => ok(`subject-for-${accessToken}`),
   // Goes through the real loader, so these tests exercise the same parsing production does.
   env: Env = {},
+  store: SharedStore = new MemoryStore(),
 ) {
   const { config } = loadHostedConfig({
     GREMLIN_MCP_RESOURCE_URL: RESOURCE,
@@ -76,6 +77,8 @@ async function startApp(
     config: config.app,
     ...(factory ? { createServerForCredential: factory } : {}),
     validateCredential,
+    credentialFor: exchangedFor,
+    store,
   });
   const server: Server = createServer((req, res) => app.handle(req, res));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -254,8 +257,8 @@ describe('MCP HTTP app', () => {
       // reflected later, and what matters is whose authority it resolves to, not how it is
       // wrapped. The exact values come from the stub validator.
       expect(await Promise.all(credentials.map(authorizationHeader))).toEqual([
-        `Bearer exchanged-for-subject-for-${TOKEN_A}`,
-        `Bearer exchanged-for-subject-for-${TOKEN_B}`,
+        `Bearer exchanged-for-${TOKEN_A}`,
+        `Bearer exchanged-for-${TOKEN_B}`,
       ]);
       // Distinct instances, not one memoised server handed to both.
       expect(factory.mock.results[0].value).not.toBe(factory.mock.results[1].value);
@@ -269,11 +272,7 @@ describe('MCP HTTP app', () => {
       // lets whichever arrived last win for both, so the request presenting a freshly narrowed
       // token executes with the older, wider one. Asserted end to end because the scoping has to
       // survive the SDK's own dispatch to reach the tool handler.
-      harness = await startApp(credentialReportingServer, async (accessToken) => ({
-        status: 'ok',
-        identity: { subject: 'company-1:user-1' },
-        credential: delegatedCredential(accessToken, async () => `exchanged<${accessToken}>`),
-      }));
+      harness = await startApp(credentialReportingServer, async () => ok('company-1:user-1'));
 
       const initialized = await mcpRequest(harness.origin, { token: 'gremlin_oat_before' });
       const sessionId = initialized.headers.get('mcp-session-id')!;
@@ -291,8 +290,8 @@ describe('MCP HTTP app', () => {
         }).then(rpcBody),
       ]);
 
-      expect(before.result.content[0].text).toBe('Bearer exchanged<gremlin_oat_before>');
-      expect(after.result.content[0].text).toBe('Bearer exchanged<gremlin_oat_after>');
+      expect(before.result.content[0].text).toBe('Bearer exchanged-for-gremlin_oat_before');
+      expect(after.result.content[0].text).toBe('Bearer exchanged-for-gremlin_oat_after');
     });
 
     it('refuses a session id presented with a different credential', async () => {
@@ -397,13 +396,38 @@ describe('MCP HTTP app', () => {
       expect(validate).toHaveBeenCalledTimes(1);
     });
 
+    it('validates once for every instance sharing a store', async () => {
+      // Behind a load balancer each request can land anywhere. With a shared store the second
+      // instance reuses the first's outcome instead of probing upstream again, and still serves
+      // the request with that request's own credential, which is never stored.
+      const store = new MemoryStore();
+      const validate = vi.fn<CredentialValidator>(async () => ok('user-a'));
+      const other = await startApp(credentialReportingServer, validate, {}, store);
+      try {
+        harness = await startApp(credentialReportingServer, validate, {}, store);
+
+        await mcpRequest(harness.origin, { token: TOKEN_A });
+        const initialized = await mcpRequest(other.origin, { token: TOKEN_A });
+        const sessionId = initialized.headers.get('mcp-session-id')!;
+        const whoami = await mcpRequest(other.origin, {
+          token: TOKEN_A,
+          sessionId,
+          body: callWhoami(2),
+        }).then(rpcBody);
+
+        expect(validate).toHaveBeenCalledTimes(1);
+        expect(whoami.result.content[0].text).toBe(`Bearer exchanged-for-${TOKEN_A}`);
+      } finally {
+        await other.stop();
+      }
+    });
+
     it('lets a credential through when validation is inconclusive', async () => {
       // A transport failure or a 5xx is not evidence about the token. Treating it as a rejection
       // would lock every user out of a working connector during an API blip.
       harness = await startApp(undefined, async (accessToken) => ({
         status: 'ok',
-        identity: { subject: credentialFingerprint(oauthCredential(accessToken)), unknown: true },
-        credential: delegatedCredential(accessToken, async () => `exchanged-for-${accessToken}`),
+        identity: { subject: credentialFingerprint(oauthCredential(accessToken)) },
       }));
 
       const response = await mcpRequest(harness.origin, { token: TOKEN_A });
@@ -426,12 +450,7 @@ describe('MCP HTTP app', () => {
           built.push(credential);
           return createGremlinMcpServer(credential, DEFAULT_SERVICE_URL);
         },
-        // Each token exchanges to its own upstream credential, as the real validator does.
-        async (accessToken) => ({
-          status: 'ok',
-          identity: { subject: 'company-1:user-1' },
-          credential: delegatedCredential(accessToken, async () => `exchanged-for-${accessToken}`),
-        }),
+        async () => ok('company-1:user-1'),
       );
 
       const initialized = await mcpRequest(harness.origin, { token: 'gremlin_oat_before_refresh' });

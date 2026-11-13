@@ -1,5 +1,7 @@
 import { BlockList, isIP } from 'node:net';
 
+import type { SharedStore } from '../shared-store';
+
 /**
  * Sources whose traffic is many users rather than one caller -- an LLM vendor's egress, whose every
  * user of a hosted connector reaches this server from the same few addresses.
@@ -53,15 +55,14 @@ export function isTrustedSource(trusted: BlockList, source: string): boolean {
 /**
  * Counts events per source in fixed windows and says when a source has used its allowance.
  *
- * <p>Per-instance, deliberately: the counters bound work this instance does, so they share its
- * lifetime. The map is replaced each window, so a flood of distinct sources cannot grow it past one
- * window's worth.
+ * <p>Counts live in a {@link SharedStore}. With a shared one, every instance counts into the same
+ * window -- windows are aligned to the epoch, not to this process -- so the bound is fleet-wide.
+ * With a private one it bounds this instance's own work. Each window's counter expires with it.
  */
 export class SourceRateLimiter {
-  private windowStartedAt = 0;
-  private counts = new Map<string, number>();
-
   constructor(
+    private readonly name: string,
+    private readonly store: SharedStore,
     private readonly windowMs: number,
     private readonly perSource: number,
     private readonly perTrustedSource: number,
@@ -69,15 +70,13 @@ export class SourceRateLimiter {
   ) {}
 
   /** Records one event for `source`; true when that source was already at its bound. */
-  exceeded(source: string, now: number): boolean {
-    if (now - this.windowStartedAt >= this.windowMs) {
-      this.windowStartedAt = now;
-      this.counts = new Map();
-    }
+  async exceeded(source: string, now: number): Promise<boolean> {
+    const window = Math.floor(now / this.windowMs);
+    const used = await this.store.increment(
+      `rl:${this.name}:${source}:${window}`,
+      (window + 1) * this.windowMs - now,
+    );
     const bound = isTrustedSource(this.trusted, source) ? this.perTrustedSource : this.perSource;
-    const used = this.counts.get(source) ?? 0;
-    if (used >= bound) return true;
-    this.counts.set(source, used + 1);
-    return false;
+    return used > bound;
   }
 }

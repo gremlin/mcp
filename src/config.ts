@@ -103,6 +103,8 @@ export interface HostedConfig {
   apiResourceUrl: string;
   oauthClientId: string;
   oauthClientSecret: string;
+  /** Shares auth caches and the validation rate bound across instances. Unset means per instance. */
+  redisUrl?: string;
   app: HttpAppConfig;
 }
 
@@ -185,6 +187,11 @@ const hostedShape = {
   GREMLIN_MCP_MAX_VALIDATIONS_PER_MINUTE_TRUSTED: positiveInt().default(
     DEFAULT_MAX_VALIDATIONS_PER_MINUTE_TRUSTED,
   ),
+  // May carry a password, which the rule-not-value convention keeps out of errors.
+  GREMLIN_MCP_REDIS_URL: z
+    .string()
+    .refine(isRedisUrl, 'must be a redis:// or rediss:// URL')
+    .optional(),
 };
 
 /** Config for the locally-run stdio server. */
@@ -210,6 +217,7 @@ export function loadHostedConfig(env: Env): Loaded<HostedConfig> {
       apiResourceUrl: vars.GREMLIN_API_RESOURCE_URL,
       oauthClientId: vars.GREMLIN_MCP_OAUTH_CLIENT_ID,
       oauthClientSecret: vars.GREMLIN_MCP_OAUTH_CLIENT_SECRET,
+      redisUrl: vars.GREMLIN_MCP_REDIS_URL,
       app: {
         serviceUrl: vars.GREMLIN_SERVICE_URL,
         resourceUrl: vars.GREMLIN_MCP_RESOURCE_URL,
@@ -279,6 +287,15 @@ function isHttpUrl(value: string): boolean {
   try {
     const { protocol } = new URL(value);
     return protocol === 'https:' || protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function isRedisUrl(value: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(value);
+    return (protocol === 'redis:' || protocol === 'rediss:') && hostname !== '';
   } catch {
     return false;
   }

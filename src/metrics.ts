@@ -28,6 +28,7 @@ const OPERATION_DURATION = 'mcp.server.operation.duration';
 const SESSION_DURATION = 'mcp.server.session.duration';
 const SESSIONS_ACTIVE = 'gremlin.mcp.sessions.active';
 const REQUESTS_REJECTED = 'gremlin.mcp.requests.rejected';
+const SHARED_STORE_ERRORS = 'gremlin.mcp.shared_store.errors';
 
 // The MCP semantic conventions' advice for both duration histograms.
 const DURATION_BUCKETS_S = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300];
@@ -56,6 +57,7 @@ const OTHER = '_OTHER';
 const ATTR_REJECTION_REASON = 'gremlin.mcp.rejection.reason';
 const ATTR_SOURCE_TRUSTED = 'gremlin.mcp.source.trusted';
 const ATTR_SESSION_END_REASON = 'gremlin.mcp.session.end_reason';
+const ATTR_SHARED_STORE_OPERATION = 'gremlin.mcp.shared_store.operation';
 const ERROR_TYPE_CANCELLED = 'cancelled';
 const ERROR_TYPE_SESSION_CLOSED = 'session_closed';
 const ERROR_TYPE_TRANSPORT_ERROR = 'transport_error';
@@ -229,6 +231,19 @@ export function createMcpMetrics(transport: keyof typeof TRANSPORT_ATTRIBUTES) {
         }
         close?.();
       };
+    },
+  };
+}
+
+/**
+ * Counts shared-store calls that failed and fell back to memory. Non-zero means instances have
+ * quietly gone back to exchanging and rate limiting on their own.
+ */
+export function createSharedStoreMetrics() {
+  const errors = metrics.getMeter(METER_NAME).createCounter(SHARED_STORE_ERRORS, { unit: '{error}' });
+  return {
+    failed(operation: string): void {
+      errors.add(1, { [ATTR_SHARED_STORE_OPERATION]: operation });
     },
   };
 }

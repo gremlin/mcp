@@ -7,6 +7,7 @@ import {
   trustedSourcesFrom,
   type SourceRange,
 } from '../../src/http/source-limits';
+import { MemoryStore } from '../../src/shared-store';
 
 function trustedRanges(...entries: string[]) {
   return trustedSourcesFrom(
@@ -49,24 +50,44 @@ describe('parseSourceRange', () => {
 });
 
 describe('SourceRateLimiter', () => {
-  it('gives each source its own allowance and a trusted source a larger one', () => {
-    const limiter = new SourceRateLimiter(60_000, 2, 5, trustedRanges('198.51.100.0/24'));
-    const now = 1_000;
+  function limiter(perSource: number, perTrusted: number, trusted = trustedRanges(), store = new MemoryStore()) {
+    return new SourceRateLimiter('test', store, 60_000, perSource, perTrusted, trusted);
+  }
 
-    const attacker = [1, 2, 3].map(() => limiter.exceeded('203.0.113.1', now));
-    expect(attacker).toEqual([false, false, true]);
+  async function sequence(l: SourceRateLimiter, source: string, count: number, now = 1_000) {
+    const results: boolean[] = [];
+    for (let i = 0; i < count; i++) results.push(await l.exceeded(source, now));
+    return results;
+  }
+
+  it('gives each source its own allowance and a trusted source a larger one', async () => {
+    const l = limiter(2, 5, trustedRanges('198.51.100.0/24'));
+
+    expect(await sequence(l, '203.0.113.1', 3)).toEqual([false, false, true]);
     // Another caller is untouched by the first one's flood.
-    expect(limiter.exceeded('203.0.113.2', now)).toBe(false);
+    expect(await l.exceeded('203.0.113.2', 1_000)).toBe(false);
 
-    const vendor = [1, 2, 3, 4, 5, 6].map(() => limiter.exceeded('198.51.100.10', now));
-    expect(vendor).toEqual([false, false, false, false, false, true]);
+    expect(await sequence(l, '198.51.100.10', 6)).toEqual([false, false, false, false, false, true]);
   });
 
-  it('starts a fresh allowance each window', () => {
-    const limiter = new SourceRateLimiter(60_000, 1, 1, trustedRanges());
+  it('starts a fresh allowance each window', async () => {
+    const l = limiter(1, 1);
 
-    expect(limiter.exceeded('203.0.113.1', 0)).toBe(false);
-    expect(limiter.exceeded('203.0.113.1', 30_000)).toBe(true);
-    expect(limiter.exceeded('203.0.113.1', 60_000)).toBe(false);
+    expect(await l.exceeded('203.0.113.1', 0)).toBe(false);
+    expect(await l.exceeded('203.0.113.1', 30_000)).toBe(true);
+    expect(await l.exceeded('203.0.113.1', 60_000)).toBe(false);
+  });
+
+  it('enforces one bound across every limiter sharing a store', async () => {
+    // Several instances behind a load balancer. The authorization-server budget is shared by all of
+    // them, so the bound protecting it must be too, not multiplied by the instance count.
+    const store = new MemoryStore();
+    const a = limiter(2, 2, trustedRanges(), store);
+    const b = limiter(2, 2, trustedRanges(), store);
+
+    expect(await a.exceeded('203.0.113.1', 1_000)).toBe(false);
+    expect(await b.exceeded('203.0.113.1', 2_000)).toBe(false);
+    expect(await a.exceeded('203.0.113.1', 3_000)).toBe(true);
+    expect(await b.exceeded('203.0.113.1', 4_000)).toBe(true);
   });
 });

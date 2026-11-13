@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { TokenExchanger } from '../../src/auth/token-exchange';
+import { MemoryStore } from '../../src/shared-store';
 import { collectMetrics } from './metric-reader';
 
 /**
@@ -102,7 +103,7 @@ describe('TokenExchanger', () => {
       status: 200,
       body: { access_token: 'gremlin_oat_api', expires_in: 300 },
     }));
-    const exchanger = new TokenExchanger(CONFIG, () => now);
+    const exchanger = new TokenExchanger(CONFIG, new MemoryStore(() => now), () => now);
 
     await exchanger.exchange(SUBJECT);
     now += 280_000;
@@ -171,13 +172,14 @@ describe('TokenExchanger', () => {
     // A failed exchange must not pin the user out for the cache lifetime, especially when the
     // failure was the authorization server being briefly unreachable.
     const fetchMock = stubFetch(() => ({ status: 503, body: {} }));
-    const exchanger = new TokenExchanger(CONFIG);
+    const store = new MemoryStore();
+    const exchanger = new TokenExchanger(CONFIG, store);
 
     await exchanger.exchange(SUBJECT);
     await exchanger.exchange(SUBJECT);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(exchanger.size()).toBe(0);
+    expect(store.size()).toBe(0);
   });
 
   it('keys the cache per subject token', async () => {
@@ -211,16 +213,17 @@ describe('TokenExchanger', () => {
         expires_in: 300,
       },
     }));
-    const exchanger = new TokenExchanger(CONFIG, () => now);
+    const store = new MemoryStore(() => now);
+    const exchanger = new TokenExchanger(CONFIG, store, () => now);
 
     await exchanger.exchange('gremlin_oat_before_refresh');
     await exchanger.exchange('gremlin_oat_after_refresh');
-    expect(exchanger.size()).toBe(2);
+    expect(store.size()).toBe(2);
 
     now += 301_000;
-    exchanger.reapExpired();
+    store.sweep();
 
-    expect(exchanger.size()).toBe(0);
+    expect(store.size()).toBe(0);
   });
 
   it('keeps entries that are still live when sweeping', async () => {
@@ -229,13 +232,14 @@ describe('TokenExchanger', () => {
       status: 200,
       body: { access_token: 'gremlin_oat_api', expires_in: 300 },
     }));
-    const exchanger = new TokenExchanger(CONFIG, () => now);
+    const store = new MemoryStore(() => now);
+    const exchanger = new TokenExchanger(CONFIG, store, () => now);
 
     await exchanger.exchange(SUBJECT);
     now += 60_000;
-    exchanger.reapExpired();
+    store.sweep();
 
-    expect(exchanger.size()).toBe(1);
+    expect(store.size()).toBe(1);
   });
 
   it('forgets a token on request', async () => {
@@ -246,9 +250,77 @@ describe('TokenExchanger', () => {
     const exchanger = new TokenExchanger(CONFIG);
 
     await exchanger.exchange(SUBJECT);
-    exchanger.forget(SUBJECT);
+    await exchanger.forget(SUBJECT);
     await exchanger.exchange(SUBJECT);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe('with a shared store', () => {
+    function apiToken() {
+      return stubFetch(() => ({ status: 200, body: { access_token: 'gremlin_oat_api_secret', expires_in: 300 } }));
+    }
+
+    it('exchanges once for every exchanger sharing the store', async () => {
+      // Several instances behind a load balancer: without sharing, each one exchanges the same
+      // client token, multiplying load on the authorization server by the instance count.
+      const fetchMock = apiToken();
+      const store = new MemoryStore();
+
+      const first = await new TokenExchanger(CONFIG, store).exchange(SUBJECT);
+      const second = await new TokenExchanger(CONFIG, store).exchange(SUBJECT);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+    });
+
+    it('stores neither the exchanged token nor the client token in readable form', async () => {
+      // With Redis these entries leave the process. Whoever can read the store must not get a
+      // live API credential out of it.
+      apiToken();
+      const store = new MemoryStore();
+      const set = vi.spyOn(store, 'set');
+
+      await new TokenExchanger(CONFIG, store).exchange(SUBJECT);
+
+      expect(set).toHaveBeenCalledTimes(1);
+      const [key, value] = set.mock.calls[0];
+      for (const stored of [key, value, Buffer.from(value, 'base64').toString('latin1')]) {
+        expect(stored).not.toContain('gremlin_oat_api_secret');
+        expect(stored).not.toContain(SUBJECT);
+      }
+    });
+
+    it('expires the stored entry before the token it holds', async () => {
+      // Redis drops the entry on its own, so its TTL is the only thing keeping a stale token out.
+      apiToken();
+      const store = new MemoryStore();
+      const set = vi.spyOn(store, 'set');
+
+      await new TokenExchanger(CONFIG, store).exchange(SUBJECT);
+
+      const ttl = set.mock.calls[0][2];
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThan(300_000);
+    });
+
+    it('treats an entry it cannot open as a miss', async () => {
+      // Corruption, or a value written by something else. Either way it must not surface as a token.
+      const fetchMock = apiToken();
+      const store = new MemoryStore();
+      const set = vi.spyOn(store, 'set');
+      const exchanger = new TokenExchanger(CONFIG, store);
+      await exchanger.exchange(SUBJECT);
+      const key = set.mock.calls[0][0];
+
+      for (const junk of ['', 'not base64 at all', Buffer.alloc(64).toString('base64')]) {
+        await store.set(key, junk, 60_000);
+        expect(await exchanger.exchange(SUBJECT)).toMatchObject({
+          ok: true,
+          accessToken: 'gremlin_oat_api_secret',
+        });
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
   });
 });

@@ -147,6 +147,25 @@ describe('loadHostedConfig', () => {
     expect(isTrustedSource(config.app.trustedSources, '2001:db8::1')).toBe(true);
   });
 
+  it('accepts redis:// and rediss:// URLs, and leaves Redis off when unset', () => {
+    expect(loadHostedConfig(HOSTED).config.redisUrl).toBeUndefined();
+    for (const url of ['redis://localhost:6379', 'rediss://:pw@cache.example.com:6380/0']) {
+      expect(loadHostedConfig({ ...HOSTED, GREMLIN_MCP_REDIS_URL: url }).config.redisUrl).toBe(url);
+    }
+  });
+
+  it.each(['http://cache:6379', 'cache:6379', 'redis://', 'not a url'])(
+    'refuses a Redis URL of %s without echoing it',
+    (url) => {
+      // The URL can carry the Redis password, so the error names the rule and never the value.
+      const reported = problems(() =>
+        loadHostedConfig({ ...HOSTED, GREMLIN_MCP_REDIS_URL: url.replace('cache', 'cache-secret') }),
+      );
+      expect(reported).toEqual(['GREMLIN_MCP_REDIS_URL must be a redis:// or rediss:// URL']);
+      expect(reported.join()).not.toContain('secret');
+    },
+  );
+
   it('reports every problem at once, so one restart can fix them all', () => {
     expect(
       problems(() =>

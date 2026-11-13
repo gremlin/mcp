@@ -56,6 +56,7 @@ resource attributes.
 | `mcp.server.session.duration` | Histogram | `s` | `gremlin.mcp.session.end_reason`, `network.transport`, `network.protocol.name` | How long a session lasted. Hosted only |
 | `gremlin.mcp.sessions.active` | UpDownCounter | `{session}` | | Open sessions. Hosted only |
 | `gremlin.mcp.requests.rejected` | Counter | `{request}` | `gremlin.mcp.rejection.reason`, `gremlin.mcp.source.trusted` | Requests refused before reaching a session. Hosted only |
+| `gremlin.mcp.shared_store.errors` | Counter | `{error}` | `gremlin.mcp.shared_store.operation` | Redis calls that failed and fell back to per-instance memory. Hosted with `GREMLIN_MCP_REDIS_URL` only |
 
 - **`network.transport`:** `pipe` for stdio; `tcp` for hosted, with `network.protocol.name=http`.
 - **`error.type`:** `tool_error` when a tool returns `isError`, or the JSON-RPC error code. A request that gets no response is `cancelled` (by the client), `session_closed` (its session ended first) or `transport_error` (the response could not be sent).

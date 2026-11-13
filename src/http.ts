@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 
 import { createMcpHttpApp, exchangeForApiCredential } from './http/app';
 import { loadHostedConfig, loadOrExit } from './config';
+import { createSharedStoreMetrics } from './metrics';
+import { FallbackStore, MemoryStore, RedisStore, type SharedStore } from './shared-store';
 import { startTelemetry } from './telemetry';
 import { TokenExchanger } from './auth/token-exchange';
 
@@ -23,41 +25,67 @@ const config = loadOrExit(loadHostedConfig);
 
 const stopTelemetry = startTelemetry(config.telemetry);
 
-const exchanger = new TokenExchanger({
-  tokenEndpoint: `${config.app.authorizationServer}/v1/oauth2/token`,
-  clientId: config.oauthClientId,
-  clientSecret: config.oauthClientSecret,
-  targetResource: config.apiResourceUrl,
-});
-
-const app = createMcpHttpApp({
-  config: config.app,
-  validateCredential: exchangeForApiCredential(exchanger, config.serviceUrl),
-  reapCredentialCaches: () => exchanger.reapExpired(),
-});
-const httpServer = createServer((req, res) => app.handle(req, res));
-
-if (config.keepAliveTimeoutSeconds) {
-  httpServer.keepAliveTimeout = config.keepAliveTimeoutSeconds * 1000;
+async function connectStore(redisUrl: string | undefined): Promise<SharedStore> {
+  if (!redisUrl) return new MemoryStore();
+  let redis: RedisStore;
+  try {
+    redis = await RedisStore.connect(redisUrl);
+  } catch (error) {
+    // Not the URL itself: it may carry a password.
+    process.stderr.write(
+      `Cannot connect to GREMLIN_MCP_REDIS_URL: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  }
+  const storeMetrics = createSharedStoreMetrics();
+  return new FallbackStore(redis, new MemoryStore(), (operation) => storeMetrics.failed(operation));
 }
 
-const reaper = setInterval(() => app.reapIdleSessions(), 60_000);
-reaper.unref();
+// Async only because connecting to Redis is; nothing is served until it has finished.
+async function main(): Promise<void> {
+  const store = await connectStore(config.redisUrl);
 
-httpServer.listen(config.port, () => {
-  process.stderr.write(
-    `Gremlin MCP server listening on :${config.port} as ${config.app.resourceUrl}\n`,
+  const exchanger = new TokenExchanger(
+    {
+      tokenEndpoint: `${config.app.authorizationServer}/v1/oauth2/token`,
+      clientId: config.oauthClientId,
+      clientSecret: config.oauthClientSecret,
+      targetResource: config.apiResourceUrl,
+    },
+    store,
   );
-});
 
-async function shutdown(): Promise<void> {
-  clearInterval(reaper);
-  // Stop accepting first, so no session can open after closeAll has run.
-  const closed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
-  await app.closeAll();
-  await Promise.all([closed, stopTelemetry()]);
-  process.exit(0);
+  const app = createMcpHttpApp({
+    config: config.app,
+    store,
+    ...exchangeForApiCredential(exchanger, config.serviceUrl),
+  });
+  const httpServer = createServer((req, res) => app.handle(req, res));
+
+  if (config.keepAliveTimeoutSeconds) {
+    httpServer.keepAliveTimeout = config.keepAliveTimeoutSeconds * 1000;
+  }
+
+  const reaper = setInterval(() => app.reapIdleSessions(), 60_000);
+  reaper.unref();
+
+  httpServer.listen(config.port, () => {
+    process.stderr.write(
+      `Gremlin MCP server listening on :${config.port} as ${config.app.resourceUrl}\n`,
+    );
+  });
+
+  async function shutdown(): Promise<void> {
+    clearInterval(reaper);
+    // Stop accepting first, so no session can open after closeAll has run.
+    const closed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await app.closeAll();
+    await Promise.all([closed, stopTelemetry(), store.close()]);
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => void shutdown());
+  process.on('SIGINT', () => void shutdown());
 }
 
-process.on('SIGTERM', () => void shutdown());
-process.on('SIGINT', () => void shutdown());
+void main();

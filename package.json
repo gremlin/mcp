@@ -26,8 +26,8 @@
   "author": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
     "@isaacs/ttlcache": "^1.1.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "zod": "^3.25.75"
   },
   "devDependencies": {
@@ -38,6 +38,7 @@
     "@opentelemetry/resources": "^3.0.0",
     "@opentelemetry/sdk-metrics": "^3.0.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
+    "@redis/client": "^6.3.1",
     "@types/node": "^24.0.10",
     "esbuild": "^0.28.1",
     "typescript": "^5.8.3",
