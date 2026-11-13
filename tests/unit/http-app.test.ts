@@ -11,6 +11,7 @@ import {
   type ValidationOutcome,
 } from '../../src/http/app';
 import { PROTECTED_RESOURCE_PATH } from '../../src/auth/protected-resource';
+import { seal, sealingKey } from '../../src/auth/sealed';
 import { DEFAULT_SERVICE_URL, loadHostedConfig, type Env } from '../../src/config';
 
 import {
@@ -79,6 +80,7 @@ async function startApp(
     validateCredential,
     credentialFor: exchangedFor,
     store,
+    sealing: sealingKey(config.oauthClientSecret),
   });
   const server: Server = createServer((req, res) => app.handle(req, res));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -419,6 +421,25 @@ describe('MCP HTTP app', () => {
         expect(whoami.result.content[0].text).toBe(`Bearer exchanged-for-${TOKEN_A}`);
       } finally {
         await other.stop();
+      }
+    });
+
+    it('does not honour a validation outcome it did not seal', async () => {
+      // With Redis, whoever can write to it could otherwise bind their own token to another user's
+      // subject and join that user's session, whose response cache holds the victim's data. They
+      // hold their own token, so a key derived from it alone would not stop them.
+      const store = new MemoryStore();
+      const validate = vi.fn<CredentialValidator>(async (token) => ok(token === TOKEN_B ? 'victim' : 'attacker'));
+      harness = await startApp(undefined, validate, {}, store);
+      const victim = await mcpRequest(harness.origin, { token: TOKEN_B });
+      const sessionId = victim.headers.get('mcp-session-id')!;
+
+      const key = `val:${credentialFingerprint(oauthCredential(TOKEN_A))}`;
+      const forged = JSON.stringify({ status: 'ok', identity: { subject: 'victim' } });
+      for (const value of [forged, seal(sealingKey('not-the-server-secret'), TOKEN_A, forged)]) {
+        await store.set(key, value, 60_000);
+        const response = await mcpRequest(harness.origin, { token: TOKEN_A, sessionId });
+        expect(response.status).toBe(401);
       }
     });
 

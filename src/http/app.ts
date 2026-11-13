@@ -12,6 +12,7 @@ import {
   type CredentialSlot,
   type GremlinCredential,
 } from '../auth/credential';
+import { openJson, seal } from '../auth/sealed';
 import { TokenExchanger } from '../auth/token-exchange';
 import {
   bearerTokenFrom,
@@ -326,16 +327,6 @@ export function exchangeForApiCredential(
   return { validateCredential, credentialFor };
 }
 
-function readCachedOutcome(value: string | undefined): ValidationOutcome | undefined {
-  if (value === undefined) return undefined;
-  try {
-    const parsed = CachedOutcome.safeParse(JSON.parse(value));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export interface McpHttpApp {
   handle: (req: IncomingMessage, res: ServerResponse) => void;
   reapIdleSessions: () => void;
@@ -350,6 +341,7 @@ export function createMcpHttpApp(
     validateCredential,
     credentialFor,
     store = new MemoryStore(),
+    sealing,
   }: {
     config: HttpAppConfig;
     createServerForCredential?: ServerFactory;
@@ -360,6 +352,11 @@ export function createMcpHttpApp(
      * is Redis, so both cost one upstream probe and one bound for the fleet. Swept on the reaper tick.
      */
     store?: SharedStore;
+    /**
+     * Seals cached validation outcomes; see `sealed.ts`. Required, because an outcome decides which
+     * session a caller may join, so one forged in the store must not open.
+     */
+    sealing: Buffer;
   },
 ): McpHttpApp {
   const sessions = new Map<string, Session>();
@@ -419,7 +416,7 @@ export function createMcpHttpApp(
     source: string,
   ): Promise<ValidationOutcome | { status: 'throttled' }> {
     const key = `val:${fingerprint}`;
-    const cached = readCachedOutcome(await store.get(key));
+    const cached = openJson(sealing, accessToken, await store.get(key), CachedOutcome);
     if (cached) return cached;
     // Only a miss goes upstream, so only a miss is counted -- and it is counted before the call, so
     // a source over its bound costs the authorization server nothing.
@@ -431,7 +428,7 @@ export function createMcpHttpApp(
     // `unavailable` says nothing about the token, so caching it would extend an
     // authorization-server blip into a longer outage of our own.
     if (outcome.status !== 'unavailable') {
-      await store.set(key, JSON.stringify(outcome), VALIDATION_TTL_MS);
+      await store.set(key, seal(sealing, accessToken, JSON.stringify(outcome)), VALIDATION_TTL_MS);
     }
     return outcome;
   }

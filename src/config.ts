@@ -52,6 +52,11 @@ const DEFAULT_MAX_VALIDATIONS_PER_MINUTE = 60;
 /**
  * The same cap for a trusted source. Below the authorization server's per-client bound, so no
  * single source -- trusted or not -- can spend all of it.
+ *
+ * <p>That bound is fleet-wide, since every instance exchanges as the same client, so this only
+ * holds with `GREMLIN_MCP_REDIS_URL` set: without it each instance counts on its own, and N
+ * instances allow N times this. The same goes during a Redis outage, which falls back to
+ * per-instance counts.
  */
 const DEFAULT_MAX_VALIDATIONS_PER_MINUTE_TRUSTED = 3000;
 

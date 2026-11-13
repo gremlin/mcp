@@ -5,6 +5,7 @@ import { loadHostedConfig, loadOrExit } from './config';
 import { createSharedStoreMetrics } from './metrics';
 import { FallbackStore, MemoryStore, RedisStore, type SharedStore } from './shared-store';
 import { startTelemetry } from './telemetry';
+import { sealingKey } from './auth/sealed';
 import { TokenExchanger } from './auth/token-exchange';
 
 /**
@@ -59,6 +60,7 @@ async function main(): Promise<void> {
   const app = createMcpHttpApp({
     config: config.app,
     store,
+    sealing: sealingKey(config.oauthClientSecret),
     ...exchangeForApiCredential(exchanger, config.serviceUrl),
   });
   const httpServer = createServer((req, res) => app.handle(req, res));

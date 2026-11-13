@@ -5,7 +5,7 @@ import z from 'zod';
 
 import { meteredFetch } from '../metrics';
 import { MemoryStore, type SharedStore } from '../shared-store';
-import { open, seal } from './sealed';
+import { openJson, seal, sealingKey } from './sealed';
 
 /**
  * RFC 8693 token exchange against Gremlin's authorization server. See the design, §B3.8 and §B4.3.
@@ -63,18 +63,21 @@ type CacheEntry = z.infer<typeof CacheEntry>;
  * authorization server keeps working here until the entry lapses.
  *
  * <p>Entries live in a {@link SharedStore}, so with Redis every instance reuses one exchange. They are
- * sealed under the client token (see `sealed.ts`), because with Redis they leave the process. Each
+ * sealed (see `sealed.ts`), because with Redis they leave the process. Each
  * instance also keeps a short-lived plaintext copy in memory, in front of the store.
  */
 export class TokenExchanger {
   private readonly fetch = meteredFetch();
   private readonly local = new TTLCache<string, CacheEntry>({ max: LOCAL_MAX_ENTRIES, ttl: LOCAL_TTL_MS });
+  private readonly sealing: Buffer;
 
   constructor(
     private readonly config: TokenExchangeConfig,
     private readonly store: SharedStore = new MemoryStore(),
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    this.sealing = sealingKey(config.clientSecret);
+  }
 
   /** A stable, non-reversible handle for a client token, safe to use as a store key. */
   private key(subjectToken: string): string {
@@ -85,22 +88,12 @@ export class TokenExchanger {
   private async cached(key: string, subjectToken: string): Promise<CacheEntry | undefined> {
     let entry = this.local.get(key);
     if (!entry) {
-      entry = this.opened(subjectToken, await this.store.get(key));
+      entry = openJson(this.sealing, subjectToken, await this.store.get(key), CacheEntry);
       if (entry) this.local.set(key, entry);
     }
     // The store's TTL already applies the margin; this covers clocks that disagree with it, and the
     // local copy, whose TTL knows nothing of the token's.
     return entry && entry.expiresAt - EXPIRY_MARGIN_MS > this.now() ? entry : undefined;
-  }
-
-  private opened(subjectToken: string, sealed: string | undefined): CacheEntry | undefined {
-    const plaintext = sealed === undefined ? undefined : open(subjectToken, sealed);
-    if (plaintext === undefined) return undefined;
-    try {
-      return CacheEntry.parse(JSON.parse(plaintext));
-    } catch {
-      return undefined;
-    }
   }
 
   async exchange(subjectToken: string): Promise<ExchangeResult> {
@@ -157,7 +150,7 @@ export class TokenExchanger {
     const expiresAt = now + (payload.expires_in ?? 0) * 1000;
     const entry: CacheEntry = { accessToken: payload.access_token, expiresAt };
     this.local.set(key, entry);
-    await this.store.set(key, seal(subjectToken, JSON.stringify(entry)), expiresAt - EXPIRY_MARGIN_MS - now);
+    await this.store.set(key, seal(this.sealing, subjectToken, JSON.stringify(entry)), expiresAt - EXPIRY_MARGIN_MS - now);
     return { ok: true, accessToken: payload.access_token, expiresAt };
   }
 
