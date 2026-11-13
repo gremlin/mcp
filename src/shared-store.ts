@@ -244,15 +244,18 @@ export class FallbackStore implements SharedStore {
   ) {}
 
   private async attempt<T>(operation: StoreOperation, run: (store: SharedStore) => Promise<T>): Promise<T> {
-    const retryAt = this.retryAt.get(operation);
+    let retryAt = this.retryAt.get(operation);
     if (retryAt !== undefined) {
       if (this.now() < retryAt) return run(this.fallback);
       // This call is the probe. Push the next one out first, so concurrent calls do not all wait on
       // a primary that is probably still down.
-      this.retryAt.set(operation, this.now() + PRIMARY_RETRY_AFTER_MS);
+      retryAt = this.now() + PRIMARY_RETRY_AFTER_MS;
+      this.retryAt.set(operation, retryAt);
     }
     try {
       const result = await run(this.primary);
+      // A call that started before a newer failure says nothing about the primary now.
+      if (this.retryAt.get(operation) !== retryAt) return result;
       if (this.retryAt.delete(operation)) {
         process.stderr.write(`Shared store recovered for ${operation}\n`);
       }
@@ -277,10 +280,20 @@ export class FallbackStore implements SharedStore {
     return this.attempt('set', (store) => store.set(key, value, ttlMs));
   }
 
-  /** From both, so an entry stored in the fallback during an outage cannot outlive a delete. */
+  /**
+   * From both, so an entry stored in the fallback during an outage cannot outlive a delete.
+   *
+   * <p>Always tries the primary, skip window or not: a delete is a `forget` of a token the API
+   * rejected, and skipping it would leave that token in Redis for every instance until it expires.
+   * They are rare, so paying the timeout during a stall is cheap.
+   */
   async delete(key: string): Promise<void> {
     await this.fallback.delete(key);
-    await this.attempt('delete', (store) => store.delete(key));
+    try {
+      await this.primary.delete(key);
+    } catch (error) {
+      this.onError('delete', error);
+    }
   }
 
   increment(key: string, ttlMs: number): Promise<number> {

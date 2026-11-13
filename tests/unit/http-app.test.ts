@@ -443,6 +443,22 @@ describe('MCP HTTP app', () => {
       }
     });
 
+    it('does not honour a sealed validation outcome past its expiry', async () => {
+      // The store's TTL is not trusted: whoever can write to Redis could re-set their own old
+      // outcome forever, so a revoked token would never be checked again.
+      const store = new MemoryStore();
+      const validate = vi.fn<CredentialValidator>(async () => ({ status: 'invalid' }));
+      harness = await startApp(undefined, validate, {}, store);
+
+      const key = `val:${credentialFingerprint(oauthCredential(TOKEN_A))}`;
+      const replayed = JSON.stringify({ outcome: ok('attacker'), expiresAt: Date.now() - 1 });
+      await store.set(key, seal(sealingKey('test-secret'), TOKEN_A, replayed), 60_000);
+      const response = await mcpRequest(harness.origin, { token: TOKEN_A });
+
+      expect(validate).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(401);
+    });
+
     it('lets a credential through when validation is inconclusive', async () => {
       // A transport failure or a 5xx is not evidence about the token. Treating it as a rejection
       // would lock every user out of a working connector during an API blip.

@@ -256,4 +256,54 @@ describe('FallbackStore', () => {
 
     expect(await fallback.get('k')).toBeUndefined();
   });
+
+  it('deletes from the primary even while skipping it', async () => {
+    // A delete is a `forget` of a token the API rejected. Skipping it would leave that token in
+    // Redis for every instance until it expires.
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    let deletes = 0;
+    let up = false;
+    const primary: SharedStore = {
+      ...broken(),
+      delete: async () => {
+        deletes++;
+        if (!up) throw new Error('timed out');
+      },
+    };
+    const store = new FallbackStore(primary, new MemoryStore(), undefined, () => 0);
+
+    await store.delete('k');
+    up = true;
+    await store.delete('k');
+
+    expect(deletes).toBe(2);
+    vi.restoreAllMocks();
+  });
+
+  it('stays degraded when a call that started earlier succeeds after a newer failure', async () => {
+    // Otherwise one slow success during a stall sends every call back to wait on the timeout.
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    let now = 0;
+    let calls = 0;
+    let finishSlow: (value: string) => void = () => {};
+    const primary: SharedStore = {
+      ...broken(),
+      get: async () => {
+        calls++;
+        if (calls === 1) return new Promise<string>((resolve) => (finishSlow = resolve));
+        throw new Error('timed out');
+      },
+    };
+    const store = new FallbackStore(primary, new MemoryStore(), undefined, () => now);
+
+    const slow = store.get('k');
+    await store.get('k');
+    now += 1;
+    finishSlow('late');
+    expect(await slow).toBe('late');
+    await store.get('k');
+
+    expect(calls).toBe(2);
+    vi.restoreAllMocks();
+  });
 });

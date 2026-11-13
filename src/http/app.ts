@@ -241,12 +241,20 @@ export type ValidationOutcome =
   | { status: 'forbidden' }
   | { status: 'unavailable' };
 
-/** What a cached outcome must look like; anything else in the store is treated as a miss. */
-const CachedOutcome = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('ok'), identity: z.object({ subject: z.string() }) }),
-  z.object({ status: z.literal('invalid') }),
-  z.object({ status: z.literal('forbidden') }),
-]);
+/**
+ * What a cached outcome must look like; anything else in the store is treated as a miss.
+ *
+ * <p>`expiresAt` is sealed with it because the store's TTL is not trusted: whoever can write to
+ * Redis could otherwise re-set an old outcome for their own token indefinitely.
+ */
+const CachedOutcome = z.object({
+  outcome: z.discriminatedUnion('status', [
+    z.object({ status: z.literal('ok'), identity: z.object({ subject: z.string() }) }),
+    z.object({ status: z.literal('invalid') }),
+    z.object({ status: z.literal('forbidden') }),
+  ]),
+  expiresAt: z.number(),
+});
 
 /** The credential a validated access token acts with. Cheap and deterministic, so built per request. */
 export type CredentialFactory = (accessToken: string) => GremlinCredential;
@@ -417,7 +425,7 @@ export function createMcpHttpApp(
   ): Promise<ValidationOutcome | { status: 'throttled' }> {
     const key = `val:${fingerprint}`;
     const cached = openJson(sealing, accessToken, await store.get(key), CachedOutcome);
-    if (cached) return cached;
+    if (cached && cached.expiresAt > Date.now()) return cached.outcome;
     // Only a miss goes upstream, so only a miss is counted -- and it is counted before the call, so
     // a source over its bound costs the authorization server nothing.
     if (await validationLimiter.exceeded(source, Date.now())) {
@@ -428,7 +436,8 @@ export function createMcpHttpApp(
     // `unavailable` says nothing about the token, so caching it would extend an
     // authorization-server blip into a longer outage of our own.
     if (outcome.status !== 'unavailable') {
-      await store.set(key, seal(sealing, accessToken, JSON.stringify(outcome)), VALIDATION_TTL_MS);
+      const entry = { outcome, expiresAt: Date.now() + VALIDATION_TTL_MS };
+      await store.set(key, seal(sealing, accessToken, JSON.stringify(entry)), VALIDATION_TTL_MS);
     }
     return outcome;
   }
