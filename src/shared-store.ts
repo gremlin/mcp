@@ -57,7 +57,10 @@ export class MemoryStore implements SharedStore {
   async increment(key: string, ttlMs: number): Promise<number> {
     const entry = this.live(key);
     const count = (entry ? Number(entry.value) : 0) + 1;
-    this.entries.set(key, { value: String(count), expiresAt: entry?.expiresAt ?? this.now() + ttlMs });
+    this.entries.set(key, {
+      value: String(count),
+      expiresAt: entry?.expiresAt ?? this.now() + ttlMs,
+    });
     return count;
   }
 
@@ -83,20 +86,36 @@ const KEY_PREFIX = 'gremlin-mcp:';
 
 /**
  * A command waits at most this long. Redis is an optimisation here, so a slow one should cost a
- * cache miss, not a slow request.
+ * cache miss, not a slow request. Enforced by {@link RedisStore}: the client's own
+ * `commandOptions.timeout` stops counting once a command is written, so a stalled server hangs it.
  */
 const COMMAND_TIMEOUT_MS = 500;
 const CONNECT_TIMEOUT_MS = 5_000;
 
+/** INCR, starting the window on the first one. Atomic, and unlike `PEXPIRE … NX` any Redis runs it. */
+const INCREMENT_SCRIPT = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return count`;
+
 function redisClient(url: string) {
-  return createClient({
+  // The default strategy retries forever, so an unreachable server would hang startup silently.
+  // Give up until the first connection succeeds; after that, outages are the fallback's problem.
+  let connectedOnce = false;
+  const client = createClient({
     url,
     // Queued commands would hang requests for the length of an outage; failing lets the fallback
     // answer straight away.
     disableOfflineQueue: true,
-    commandOptions: { timeout: COMMAND_TIMEOUT_MS },
-    socket: { connectTimeout: CONNECT_TIMEOUT_MS },
+    socket: {
+      connectTimeout: CONNECT_TIMEOUT_MS,
+      reconnectStrategy: (retries) => (connectedOnce ? Math.min(2 ** retries * 50, 2_000) : false),
+    },
   });
+  client.once('ready', () => {
+    connectedOnce = true;
+  });
+  return client;
 }
 
 export class RedisStore implements SharedStore {
@@ -115,28 +134,54 @@ export class RedisStore implements SharedStore {
     return new RedisStore(client);
   }
 
+  /**
+   * Rejects after COMMAND_TIMEOUT_MS. The command itself stays pending, and its late reply is
+   * dropped.
+   */
+  private async bounded<T>(command: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Redis command timed out after ${COMMAND_TIMEOUT_MS}ms`)),
+        COMMAND_TIMEOUT_MS,
+      );
+    });
+    try {
+      return await Promise.race([command, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async get(key: string): Promise<string | undefined> {
-    return (await this.client.get(KEY_PREFIX + key)) ?? undefined;
+    return (await this.bounded(this.client.get(KEY_PREFIX + key))) ?? undefined;
   }
 
   async set(key: string, value: string, ttlMs: number): Promise<void> {
     const ms = Math.floor(ttlMs);
     if (ms <= 0) return;
-    await this.client.set(KEY_PREFIX + key, value, { expiration: { type: 'PX', value: ms } });
+    await this.bounded(
+      this.client.set(KEY_PREFIX + key, value, {
+        expiration: { type: 'PX', value: ms },
+      }),
+    );
   }
 
   async delete(key: string): Promise<void> {
-    await this.client.del(KEY_PREFIX + key);
+    await this.bounded(this.client.del(KEY_PREFIX + key));
   }
 
-  /** One round trip, atomic. `PEXPIRE … NX` needs Redis or Valkey 7+. */
+  /**
+   * A script rather than MULTI: the client sends MULTI past `disableOfflineQueue`, so during a
+   * reconnect it would queue instead of failing over.
+   */
   async increment(key: string, ttlMs: number): Promise<number> {
-    const prefixed = KEY_PREFIX + key;
-    const [count] = await this.client
-      .multi()
-      .incr(prefixed)
-      .pExpire(prefixed, Math.max(1, Math.floor(ttlMs)), 'NX')
-      .exec();
+    const count = await this.bounded(
+      this.client.eval(INCREMENT_SCRIPT, {
+        keys: [KEY_PREFIX + key],
+        arguments: [String(Math.max(1, Math.floor(ttlMs)))],
+      }),
+    );
     return Number(count);
   }
 
@@ -157,10 +202,11 @@ export type StoreOperation = 'get' | 'set' | 'delete' | 'increment';
  * into a full one, and reporting it as a bad token would disconnect working clients (AUTH.md
  * invariant 7).
  *
- * <p>Logs only when it starts and stops degrading; `onError` sees every failure.
+ * <p>Logs only when an operation starts and stops degrading; `onError` sees every failure.
  */
 export class FallbackStore implements SharedStore {
-  private degraded = false;
+  /** Per operation, so one that keeps failing while the rest work does not flap the logs. */
+  private readonly degraded = new Set<StoreOperation>();
 
   constructor(
     private readonly primary: SharedStore,
@@ -171,17 +217,16 @@ export class FallbackStore implements SharedStore {
   private async attempt<T>(operation: StoreOperation, run: (store: SharedStore) => Promise<T>): Promise<T> {
     try {
       const result = await run(this.primary);
-      if (this.degraded) {
-        this.degraded = false;
-        process.stderr.write('Shared store recovered\n');
+      if (this.degraded.delete(operation)) {
+        process.stderr.write(`Shared store recovered for ${operation}\n`);
       }
       return result;
     } catch (error) {
       this.onError(operation, error);
-      if (!this.degraded) {
-        this.degraded = true;
+      if (!this.degraded.has(operation)) {
+        this.degraded.add(operation);
         process.stderr.write(
-          `Shared store unavailable, using per-instance memory: ${error instanceof Error ? error.message : String(error)}\n`,
+          `Shared store ${operation} unavailable, using per-instance memory: ${error instanceof Error ? error.message : String(error)}\n`,
         );
       }
       return run(this.fallback);

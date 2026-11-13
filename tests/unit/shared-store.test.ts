@@ -69,6 +69,13 @@ function contract(name: string, open: () => Promise<SharedStore>, skip = false) 
 contract('MemoryStore', async () => new MemoryStore());
 contract('RedisStore', () => RedisStore.connect(REDIS_URL!), !REDIS_URL);
 
+describe('RedisStore', () => {
+  it('fails to connect to an unreachable server instead of retrying forever', async () => {
+    // Startup must stop on a bad GREMLIN_MCP_REDIS_URL, not hang before listening.
+    await expect(RedisStore.connect('redis://127.0.0.1:1')).rejects.toThrow();
+  });
+});
+
 describe('MemoryStore', () => {
   it('reclaims expired entries on sweep, keeping live ones', async () => {
     // Keys are rarely read again once they lapse (a rotated client token, a quiet source), so
@@ -92,7 +99,14 @@ describe('FallbackStore', () => {
     const fail = async () => {
       throw new Error('connection refused');
     };
-    return { get: fail, set: fail, delete: fail, increment: fail, sweep: () => {}, close: async () => {} };
+    return {
+      get: fail,
+      set: fail,
+      delete: fail,
+      increment: fail,
+      sweep: () => {},
+      close: async () => {},
+    };
   }
 
   it('answers from the fallback when the primary fails, and reports each failure', async () => {
@@ -110,6 +124,21 @@ describe('FallbackStore', () => {
     expect(await store.get('k')).toBeUndefined();
 
     expect(failures).toEqual(['set', 'get', 'increment', 'increment', 'delete', 'get']);
+    vi.restoreAllMocks();
+  });
+
+  it('logs once when one operation keeps failing while the others work', async () => {
+    // Otherwise every request would log both "unavailable" and "recovered".
+    const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const primary: SharedStore = { ...broken(), get: async () => 'v' };
+    const store = new FallbackStore(primary, new MemoryStore());
+
+    for (let i = 0; i < 3; i++) {
+      await store.get('k');
+      await store.increment('c', 10_000);
+    }
+
+    expect(write).toHaveBeenCalledTimes(1);
     vi.restoreAllMocks();
   });
 

@@ -31,10 +31,11 @@ async function connectStore(redisUrl: string | undefined): Promise<SharedStore> 
   try {
     redis = await RedisStore.connect(redisUrl);
   } catch (error) {
-    // Not the URL itself: it may carry a password.
-    process.stderr.write(
-      `Cannot connect to GREMLIN_MCP_REDIS_URL: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    // Not the URL itself: it may carry a password. A refused dual-stack connect is an AggregateError
+    // with an empty message, so fall back to its code.
+    const reason =
+      error instanceof Error ? error.message || ('code' in error ? String(error.code) : error.name) : String(error);
+    process.stderr.write(`Cannot connect to GREMLIN_MCP_REDIS_URL: ${reason}\n`);
     process.exit(1);
   }
   const storeMetrics = createSharedStoreMetrics();
