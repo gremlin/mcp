@@ -60,7 +60,7 @@ export function createMatchContainersTool(api: GremlinApi) {
       ids: z.array(z.string()).optional().describe(
         'Match containers whose id is in this list. Mutually exclusive with isAll and multiSelectLabels.',
       ),
-      multiSelectLabels: z.record(z.array(z.string())).optional().describe(
+      multiSelectLabels: z.record(z.string(), z.array(z.string())).optional().describe(
         'Match containers by label: each key maps to a list of acceptable values for that key. ' +
         'A container matches only if every key is present with one of the listed values ' +
         '(keys combined with AND, values within a key combined with OR). ' +

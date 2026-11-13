@@ -113,13 +113,13 @@ const SHARED_SCHEMA = {
       'API path as shown in the OpenAPI spec, e.g. /reliability-tests/{reliabilityTestId}/runs. Leading slash is optional.',
     ),
   pathParams: z
-    .record(z.string())
+    .record(z.string(), z.string())
     .optional()
     .describe(
       "Values to substitute into path template variables, e.g. { reliabilityTestId: 'abc123' }.",
     ),
   queryParams: z
-    .record(z.string())
+    .record(z.string(), z.string())
     .optional()
     .describe("Query string parameters, e.g. { teamId: 'my-team' }."),
 };
@@ -325,7 +325,7 @@ export function createCreateGremlinApiTool(api: GremlinApi, mcpServer: McpServer
     ].join(' '),
     schema: {
       ...SHARED_SCHEMA,
-      body: z.record(z.unknown()).optional().describe('Request body for the POST request.'),
+      body: z.record(z.string(), z.unknown()).optional().describe('Request body for the POST request.'),
       confirmExecution: CONFIRM_EXECUTION_FIELD,
     },
     annotations: {
@@ -362,7 +362,7 @@ export function createUpdateGremlinApiTool(api: GremlinApi, mcpServer: McpServer
       method: z
         .enum(['PUT', 'PATCH'])
         .describe('PUT to replace the resource, PATCH to change part of it.'),
-      body: z.record(z.unknown()).optional().describe('Request body for the update.'),
+      body: z.record(z.string(), z.unknown()).optional().describe('Request body for the update.'),
       confirmExecution: CONFIRM_EXECUTION_FIELD,
     },
     annotations: {
