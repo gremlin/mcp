@@ -92,6 +92,13 @@ const KEY_PREFIX = 'gremlin-mcp:';
 const COMMAND_TIMEOUT_MS = 500;
 const CONNECT_TIMEOUT_MS = 5_000;
 
+/**
+ * A timed-out command stays queued until the server answers, so a stalled server would grow the
+ * queue by the request rate (~2.6 KB each) for the length of the stall. Past this, commands are
+ * refused straight away and served by the fallback. Normal depth is rate × latency, i.e. tens.
+ */
+const MAX_PENDING_COMMANDS = 1_000;
+
 /** INCR, starting the window on the first one. Atomic, and unlike `PEXPIRE … NX` any Redis runs it. */
 const INCREMENT_SCRIPT = `
 local count = redis.call('INCR', KEYS[1])
@@ -107,6 +114,7 @@ function redisClient(url: string) {
     // Queued commands would hang requests for the length of an outage; failing lets the fallback
     // answer straight away.
     disableOfflineQueue: true,
+    commandsQueueMaxLength: MAX_PENDING_COMMANDS,
     socket: {
       connectTimeout: CONNECT_TIMEOUT_MS,
       reconnectStrategy: (retries) => (connectedOnce ? Math.min(2 ** retries * 50, 2_000) : false),
