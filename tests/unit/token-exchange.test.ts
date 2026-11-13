@@ -304,18 +304,48 @@ describe('TokenExchanger', () => {
       expect(ttl).toBeLessThan(300_000);
     });
 
+    it('reads the store once per token, not once per API call', async () => {
+      // Every upstream API call resolves the token, and with Redis each read is a round trip plus
+      // an unseal. A tool making ten calls should not make ten of each.
+      apiToken();
+      const store = new MemoryStore();
+      const get = vi.spyOn(store, 'get');
+      const writer = new TokenExchanger(CONFIG, store);
+      const reader = new TokenExchanger(CONFIG, store);
+
+      await writer.exchange(SUBJECT);
+      await writer.exchange(SUBJECT);
+      for (let i = 0; i < 3; i++) await reader.exchange(SUBJECT);
+
+      // The writer's one miss, and the reader's one fill from the store.
+      expect(get).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not serve a locally held token past its expiry', async () => {
+      // The local copy's own TTL is wall-clock and knows nothing of the token's.
+      let now = 1_000_000;
+      const fetchMock = stubFetch(() => ({ status: 200, body: { access_token: 'gremlin_oat_api', expires_in: 60 } }));
+      const exchanger = new TokenExchanger(CONFIG, new MemoryStore(() => now), () => now);
+
+      await exchanger.exchange(SUBJECT);
+      now += 31_000;
+      await exchanger.exchange(SUBJECT);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
     it('treats an entry it cannot open as a miss', async () => {
       // Corruption, or a value written by something else. Either way it must not surface as a token.
       const fetchMock = apiToken();
       const store = new MemoryStore();
       const set = vi.spyOn(store, 'set');
-      const exchanger = new TokenExchanger(CONFIG, store);
-      await exchanger.exchange(SUBJECT);
+      await new TokenExchanger(CONFIG, store).exchange(SUBJECT);
       const key = set.mock.calls[0][0];
 
       for (const junk of ['', 'not base64 at all', Buffer.alloc(64).toString('base64')]) {
         await store.set(key, junk, 60_000);
-        expect(await exchanger.exchange(SUBJECT)).toMatchObject({
+        // A fresh exchanger, i.e. another instance, so the read reaches the store.
+        expect(await new TokenExchanger(CONFIG, store).exchange(SUBJECT)).toMatchObject({
           ok: true,
           accessToken: 'gremlin_oat_api_secret',
         });

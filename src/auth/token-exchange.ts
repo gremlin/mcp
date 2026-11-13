@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import TTLCache from '@isaacs/ttlcache';
 import z from 'zod';
 
 import { meteredFetch } from '../metrics';
@@ -20,6 +21,15 @@ const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
 
 /** Margin before a cached token's expiry, sized to cover a request's round trip. */
 const EXPIRY_MARGIN_MS = 30_000;
+
+/**
+ * How long an instance keeps its own copy of an entry before asking the store again. Every
+ * upstream API call resolves a token, so without this each one is a Redis round trip plus an
+ * unseal. It is also how long a `forget` on another instance can go unseen here.
+ */
+const LOCAL_TTL_MS = 30_000;
+/** Only successful exchanges land here, so this is roughly concurrent users per instance. */
+const LOCAL_MAX_ENTRIES = 10_000;
 
 export interface TokenExchangeConfig {
   /** The authorization server's token endpoint. */
@@ -45,6 +55,7 @@ export type ExchangeResult =
   | { readonly ok: false; readonly reason: ExchangeFailure };
 
 const CacheEntry = z.object({ accessToken: z.string(), expiresAt: z.number() });
+type CacheEntry = z.infer<typeof CacheEntry>;
 
 /**
  * Exchanges client tokens for API tokens, and remembers the answers for the exchanged token's own
@@ -52,10 +63,12 @@ const CacheEntry = z.object({ accessToken: z.string(), expiresAt: z.number() });
  * authorization server keeps working here until the entry lapses.
  *
  * <p>Entries live in a {@link SharedStore}, so with Redis every instance reuses one exchange. They are
- * sealed under the client token (see `sealed.ts`), because with Redis they leave the process.
+ * sealed under the client token (see `sealed.ts`), because with Redis they leave the process. Each
+ * instance also keeps a short-lived plaintext copy in memory, in front of the store.
  */
 export class TokenExchanger {
   private readonly fetch = meteredFetch();
+  private readonly local = new TTLCache<string, CacheEntry>({ max: LOCAL_MAX_ENTRIES, ttl: LOCAL_TTL_MS });
 
   constructor(
     private readonly config: TokenExchangeConfig,
@@ -69,18 +82,25 @@ export class TokenExchanger {
   }
 
   /** A live cached entry, or undefined for a miss, an unreadable value, or one too close to expiry. */
-  private async cached(key: string, subjectToken: string): Promise<z.infer<typeof CacheEntry> | undefined> {
-    const sealed = await this.store.get(key);
+  private async cached(key: string, subjectToken: string): Promise<CacheEntry | undefined> {
+    let entry = this.local.get(key);
+    if (!entry) {
+      entry = this.opened(subjectToken, await this.store.get(key));
+      if (entry) this.local.set(key, entry);
+    }
+    // The store's TTL already applies the margin; this covers clocks that disagree with it, and the
+    // local copy, whose TTL knows nothing of the token's.
+    return entry && entry.expiresAt - EXPIRY_MARGIN_MS > this.now() ? entry : undefined;
+  }
+
+  private opened(subjectToken: string, sealed: string | undefined): CacheEntry | undefined {
     const plaintext = sealed === undefined ? undefined : open(subjectToken, sealed);
     if (plaintext === undefined) return undefined;
-    let entry: z.infer<typeof CacheEntry>;
     try {
-      entry = CacheEntry.parse(JSON.parse(plaintext));
+      return CacheEntry.parse(JSON.parse(plaintext));
     } catch {
       return undefined;
     }
-    // The store's TTL already applies the margin; this covers clocks that disagree with it.
-    return entry.expiresAt - EXPIRY_MARGIN_MS > this.now() ? entry : undefined;
   }
 
   async exchange(subjectToken: string): Promise<ExchangeResult> {
@@ -135,14 +155,17 @@ export class TokenExchanger {
 
     const now = this.now();
     const expiresAt = now + (payload.expires_in ?? 0) * 1000;
-    const entry = JSON.stringify({ accessToken: payload.access_token, expiresAt });
-    await this.store.set(key, seal(subjectToken, entry), expiresAt - EXPIRY_MARGIN_MS - now);
+    const entry: CacheEntry = { accessToken: payload.access_token, expiresAt };
+    this.local.set(key, entry);
+    await this.store.set(key, seal(subjectToken, JSON.stringify(entry)), expiresAt - EXPIRY_MARGIN_MS - now);
     return { ok: true, accessToken: payload.access_token, expiresAt };
   }
 
   /** Drops a cached entry. Used when the API rejects a token we believed was good. */
   async forget(subjectToken: string): Promise<void> {
-    await this.store.delete(this.key(subjectToken));
+    const key = this.key(subjectToken);
+    this.local.delete(key);
+    await this.store.delete(key);
   }
 }
 

@@ -109,7 +109,7 @@ describe('FallbackStore', () => {
     };
   }
 
-  it('answers from the fallback when the primary fails, and reports each failure', async () => {
+  it('answers from the fallback when the primary fails, and reports each failed attempt', async () => {
     // A Redis outage must degrade to per-instance behaviour, not fail requests: everything stored
     // is a cache or a counter, so losing it costs upstream calls and nothing else.
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
@@ -123,7 +123,70 @@ describe('FallbackStore', () => {
     await store.delete('k');
     expect(await store.get('k')).toBeUndefined();
 
-    expect(failures).toEqual(['set', 'get', 'increment', 'increment', 'delete', 'get']);
+    // Repeats skip the primary, so they are not attempts.
+    expect(failures).toEqual(['set', 'get', 'increment', 'delete']);
+    vi.restoreAllMocks();
+  });
+
+  it('stops trying a failing primary for a while, then probes it once', async () => {
+    // A stalled Redis costs each attempt the full command timeout, and a request makes several, so
+    // retrying it on every call would add seconds to every request for the whole stall.
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    let now = 0;
+    let calls = 0;
+    const primary: SharedStore = {
+      ...broken(),
+      get: async () => {
+        calls++;
+        throw new Error('timed out');
+      },
+    };
+    const store = new FallbackStore(primary, new MemoryStore(), undefined, () => now);
+
+    await store.get('k');
+    await store.get('k');
+    now += 4_999;
+    await store.get('k');
+    expect(calls).toBe(1);
+
+    now += 1;
+    // Concurrent calls when the interval lapses: one waits on the primary, the rest do not.
+    await Promise.all([store.get('k'), store.get('k'), store.get('k')]);
+    expect(calls).toBe(2);
+    vi.restoreAllMocks();
+  });
+
+  it('goes back to the primary once a probe succeeds', async () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    let now = 0;
+    let up = false;
+    const primary: SharedStore = {
+      ...broken(),
+      get: async () => {
+        if (!up) throw new Error('timed out');
+        return 'from primary';
+      },
+    };
+    const store = new FallbackStore(primary, new MemoryStore(), undefined, () => now);
+
+    expect(await store.get('k')).toBeUndefined();
+    up = true;
+    expect(await store.get('k')).toBeUndefined();
+    now += 5_000;
+    expect(await store.get('k')).toBe('from primary');
+    expect(await store.get('k')).toBe('from primary');
+    vi.restoreAllMocks();
+  });
+
+  it('keeps using the primary for the operations that still work', async () => {
+    // e.g. a Redis that refuses EVAL: counters fall back, the token cache stays shared.
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const primary: SharedStore = { ...broken(), get: async () => 'from primary' };
+    const store = new FallbackStore(primary, new MemoryStore());
+
+    await store.increment('c', 10_000);
+
+    expect(await store.get('k')).toBe('from primary');
     vi.restoreAllMocks();
   });
 

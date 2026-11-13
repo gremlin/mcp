@@ -202,6 +202,9 @@ export class RedisStore implements SharedStore {
 
 export type StoreOperation = 'get' | 'set' | 'delete' | 'increment';
 
+/** How long an operation that failed on the primary goes straight to the fallback. */
+const PRIMARY_RETRY_AFTER_MS = 5_000;
+
 /**
  * Serves from `primary` and falls back to `fallback` for any call `primary` fails.
  *
@@ -210,33 +213,54 @@ export type StoreOperation = 'get' | 'set' | 'delete' | 'increment';
  * into a full one, and reporting it as a bad token would disconnect working clients (AUTH.md
  * invariant 7).
  *
- * <p>Logs only when an operation starts and stops degrading; `onError` sees every failure.
+ * <p>Once an operation fails it skips the primary for {@link PRIMARY_RETRY_AFTER_MS}, then lets one
+ * call through to probe it. Without that a stalled Redis costs every call the full command
+ * timeout, and a request makes several.
+ *
+ * <pre>
+ *   healthy ──fail──▶ skipping ──interval passes──▶ one probe ──ok──▶ healthy
+ *                        ▲                              │
+ *                        └────────────fail──────────────┘
+ * </pre>
+ *
+ * <p>Logs only when an operation starts and stops degrading; `onError` sees every failed attempt.
  */
 export class FallbackStore implements SharedStore {
-  /** Per operation, so one that keeps failing while the rest work does not flap the logs. */
-  private readonly degraded = new Set<StoreOperation>();
+  /**
+   * When each failing operation may next try the primary; absent while it works. Per operation,
+   * so one the server refuses (EVAL on a locked-down Redis, say) does not take the rest off it.
+   */
+  private readonly retryAt = new Map<StoreOperation, number>();
 
   constructor(
     private readonly primary: SharedStore,
     private readonly fallback: SharedStore,
     private readonly onError: (operation: StoreOperation, error: unknown) => void = () => {},
+    private readonly now: () => number = Date.now,
   ) {}
 
   private async attempt<T>(operation: StoreOperation, run: (store: SharedStore) => Promise<T>): Promise<T> {
+    const retryAt = this.retryAt.get(operation);
+    if (retryAt !== undefined) {
+      if (this.now() < retryAt) return run(this.fallback);
+      // This call is the probe. Push the next one out first, so concurrent calls do not all wait on
+      // a primary that is probably still down.
+      this.retryAt.set(operation, this.now() + PRIMARY_RETRY_AFTER_MS);
+    }
     try {
       const result = await run(this.primary);
-      if (this.degraded.delete(operation)) {
+      if (this.retryAt.delete(operation)) {
         process.stderr.write(`Shared store recovered for ${operation}\n`);
       }
       return result;
     } catch (error) {
       this.onError(operation, error);
-      if (!this.degraded.has(operation)) {
-        this.degraded.add(operation);
+      if (!this.retryAt.has(operation)) {
         process.stderr.write(
           `Shared store ${operation} unavailable, using per-instance memory: ${error instanceof Error ? error.message : String(error)}\n`,
         );
       }
+      this.retryAt.set(operation, this.now() + PRIMARY_RETRY_AFTER_MS);
       return run(this.fallback);
     }
   }
