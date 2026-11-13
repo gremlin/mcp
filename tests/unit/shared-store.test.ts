@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { createClient } from '@redis/client';
+
 import { FallbackStore, MemoryStore, RedisStore, type SharedStore } from '../../src/shared-store';
 
 const REDIS_URL = process.env.GREMLIN_MCP_TEST_REDIS_URL;
@@ -73,6 +75,34 @@ describe('RedisStore', () => {
   it('fails to connect to an unreachable server instead of retrying forever', async () => {
     // Startup must stop on a bad GREMLIN_MCP_REDIS_URL, not hang before listening.
     await expect(RedisStore.connect('redis://127.0.0.1:1')).rejects.toThrow();
+  });
+
+  it.skipIf(!REDIS_URL)('applies commands that timed out in the order they were sent', async () => {
+    // A timed-out command still runs once the server catches up. If a stalled set could land after
+    // the delete that followed it, a token the API rejected would come back for its full lifetime.
+    const store = await RedisStore.connect(REDIS_URL!);
+    const admin = createClient({ url: REDIS_URL });
+    await admin.connect();
+    const kept = `test:${randomUUID()}:kept`;
+    const forgotten = `test:${randomUUID()}:forgotten`;
+    try {
+      await admin.sendCommand(['CLIENT', 'PAUSE', '1000', 'ALL']);
+      // Sent together, in this order, all inside the pause.
+      const sent = await Promise.allSettled([
+        store.set(kept, 'token', 60_000),
+        store.set(forgotten, 'rejected-token', 60_000),
+        store.delete(forgotten),
+      ]);
+      expect(sent.map((result) => result.status)).toEqual(['rejected', 'rejected', 'rejected']);
+      await pause(700);
+
+      // The first proves timed-out commands do still run, so the second is not passing vacuously.
+      expect(await store.get(kept)).toBe('token');
+      expect(await store.get(forgotten)).toBeUndefined();
+    } finally {
+      await store.close();
+      await admin.close();
+    }
   });
 });
 

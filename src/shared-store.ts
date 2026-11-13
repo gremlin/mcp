@@ -145,6 +145,10 @@ export class RedisStore implements SharedStore {
   /**
    * Rejects after COMMAND_TIMEOUT_MS. The command itself stays pending, and its late reply is
    * dropped.
+   *
+   * <p>So a timed-out command can still run, and that is only safe because everything goes over one
+   * connection, which Redis executes in order: a `forget` cannot be overtaken by the `set` before
+   * it, however late that lands. A pool or cluster client would lose that guarantee.
    */
   private async bounded<T>(command: Promise<T>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
