@@ -111,16 +111,16 @@ const POSITIVE_INT = 'must be a positive whole number';
 
 function httpUrl() {
   return z
-    .string({ required_error: 'is required' })
+    .string({ error: 'is required' })
     .refine(isHttpUrl, 'must be an http or https URL')
     .transform((url) => url.replace(/\/+$/, ''));
 }
 
 function positiveInt() {
-  return z.coerce.number({ invalid_type_error: POSITIVE_INT }).int(POSITIVE_INT).positive(POSITIVE_INT);
+  return z.coerce.number({ error: POSITIVE_INT }).int(POSITIVE_INT).positive(POSITIVE_INT);
 }
 
-const required = z.string({ required_error: 'is required' });
+const required = z.string({ error: 'is required' });
 
 const list = z.string().optional().transform(splitList);
 
@@ -153,7 +153,7 @@ const stdioShape = {
 const hostedShape = {
   ...shared,
   PORT: z.coerce
-    .number({ invalid_type_error: 'must be a port number (1-65535)' })
+    .number({ error: 'must be a port number (1-65535)' })
     .int('must be a port number (1-65535)')
     .min(1, 'must be a port number (1-65535)')
     .max(65535, 'must be a port number (1-65535)')
